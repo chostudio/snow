@@ -1,0 +1,19 @@
+# secrets
+.env
+
+# vendored upstream client (fetched by scripts/setup.sh)
+vendor/
+
+# data + model artifacts
+data/
+*.mp4
+*.webm
+*.mkv
+*.jsonl
+*.pt
+
+# python
+.venv/
+__pycache__/
+*.py[cod]
+.ipynb_checkpoints/
