@@ -13,11 +13,12 @@ dependencies = [
     "lap>=0.5",
     "python-dotenv>=1.0",
     "pandas>=2.2",
+    "pyarrow>=16,<17",
     "yt-dlp>=2025.10",
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=8.0"]
+dev = ["pytest>=8.0", "usd-core>=24.0"]
 
 [project.scripts]
 snow = "snow.cli:main"
