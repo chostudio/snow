@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import shutil
 import sys
 from pathlib import Path
 
@@ -33,7 +32,14 @@ def cmd_doctor(args: argparse.Namespace) -> int:
     ok = True
     print("tools")
     for tool in ("ffmpeg", "ffprobe", "yt-dlp"):
-        path = shutil.which(tool)
+        # Resolve exactly as ingest does, or doctor reports a binary that is
+        # not the one the pipeline will run — the venv's pinned yt-dlp beats
+        # a stale Homebrew copy on PATH, and that difference is the whole
+        # point of asking.
+        try:
+            path = ing._require(tool)
+        except ing.IngestError:
+            path = None
         print(f"  {tool:9s} {path or 'MISSING'}")
         ok &= bool(path)
 
