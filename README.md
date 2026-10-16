@@ -12,19 +12,82 @@ that axis was.
 running on NVIDIA's hosted endpoint. **No local GPU needed.** Everything else
 runs on your machine.
 
+## How it works
+
+```mermaid
+flowchart LR
+    S1["1 · SCOUT<br/>find the usable<br/>slow-motion shots"]
+    S2["2 · INGEST<br/>cut and re-encode<br/>for the NIM"]
+    S3["3 · TRACK<br/>box the rider,<br/>stitch across cuts"]
+    S4["4 · POSE<br/>77-joint 3D skeleton,<br/>every frame"]
+    S5["5 · FEATURES<br/>remove camera motion,<br/>measure rotation"]
+    S6["6 · REVIEW<br/>dashboard, CSV, USD"]
+
+    S1 --> S2 --> S3 --> S4 --> S5 --> S6
 ```
-source video
-    │
-    ├─ scout ──────── find the slow-motion, full-body shots worth using
-    │
-    └─ ingest ─────── cut + re-encode to what the NIM accepts
-         └─ track ─── YOLO/ByteTrack → the NIM's bbox annotation
-              ├─ crop ──── optional: reframe onto the rider
-              └─ pose ──── the NIM → 77-joint 3D skeleton per frame
-                   ├─ features ── camera-compensated rotation → CSV/Parquet
-                   ├─ usd ─────── UsdSkelAnimation for Omniverse
-                   └─ web ─────── a browser dashboard to review it
+
+1. **Scout** splits a broadcast into shots and ranks them. Most televised
+   snowboarding is useless for pose; the super-slow-motion replays are not.
+2. **Ingest** cuts the shot you picked and re-encodes it to the exact format
+   the NIM accepts, then verifies its own output.
+3. **Track** finds the rider and writes the box annotation the NIM needs. You
+   stitch tracks across camera cuts by hand — guessing would fuse two riders.
+4. **Pose** sends clip and boxes to the NVIDIA NIM, which returns a 77-joint
+   3D skeleton per frame. This is the only step that leaves your machine.
+5. **Features** estimates the camera's own rotation from the background,
+   subtracts it, and integrates what is left — the rider's actual turn.
+6. **Review** in the browser, or take the CSV into a notebook, or open the
+   USD in Omniverse.
+
+## Architecture
+
+```mermaid
+flowchart TB
+    SRC["YouTube URL or local video file"]
+
+    subgraph PREP["YOUR MACHINE · prepare"]
+        direction LR
+        A["scout + ingest<br/>yt-dlp · ffmpeg · OpenCV"]
+        B["track + crop<br/>Ultralytics YOLO11 · ByteTrack"]
+        A --> B
+    end
+
+    subgraph CLOUD["NVIDIA CLOUD"]
+        NIM["3D Body Pose NIM<br/>gRPC on NVCF · hosted, no local GPU"]
+    end
+
+    POSES["poses.json · JSON Lines<br/>Nova-77 skeleton, every frame"]
+
+    subgraph ANALYSE["YOUR MACHINE · analyse"]
+        direction LR
+        C["features<br/>NumPy · pandas · OpenCV"]
+        D["usd<br/>.usda text, no pxr needed"]
+        E["export_session<br/>bundle for the UI"]
+    end
+
+    CSV["features.csv + .parquet<br/>notebooks, ML"]
+    USDA["skeleton.usda<br/>Omniverse, usdview, Blender"]
+
+    subgraph BROWSER["BROWSER"]
+        W["review dashboard<br/>React 18 · Vite · TypeScript"]
+    end
+
+    SRC --> A
+    B -- "clip.mp4 + bbox.txt" --> NIM
+    NIM --> POSES
+    POSES --> C --> CSV
+    POSES --> D --> USDA
+    POSES --> E --> W
 ```
+
+The only thing that leaves your machine is the clip and its boxes, going to
+the NIM. Everything else — shot selection, tracking, the rotation maths, the
+dashboard — runs locally. Stages talk to each other only through files in
+`data/`, so any stage can be re-run on its own.
+
+`export_session` picks up `features.csv` when you have run `features`, and
+falls back to a clearly-labelled display shim when you have not, so the
+dashboard works either way and always says which it is showing.
 
 ## Setup
 
