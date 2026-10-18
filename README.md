@@ -185,6 +185,7 @@ Read it before you quote a number.
 | [docs/rotation.md](docs/rotation.md) | camera compensation and the three rotation measures |
 | [docs/usd.md](docs/usd.md) | USD / Omniverse export |
 | [docs/validation.md](docs/validation.md) | what is proven and what is not |
+| [docs/training.md](docs/training.md) | **planned:** how the models would be trained |
 | [web/README.md](web/README.md) | the review dashboard |
 | [AGENTS.md](AGENTS.md) | architecture map, for agents working on the code |
 
@@ -202,6 +203,13 @@ data/               clips, tracks, poses (gitignored)
 
 ## Next
 
-Trick segmentation — splitting a run into individual hits — and the ML work on
-top of the extracted features. Closing the validation question above comes
-first, though: every downstream label depends on the spin count being right.
+Everything above is geometric: it *measures* rotation, it does not *classify*
+tricks. The learned half — a segmenter that finds the airs and a classifier
+that names them — is designed but not built.
+[docs/training.md](docs/training.md) has its own two diagrams, matching the
+pair above: how it would be trained, and on what.
+
+Closing the validation question comes first, though, and conveniently it is
+the same work: labelling a set of clips frame by frame both settles whether
+the pipeline's spin counts are right *and* produces the gold set the models
+need to be evaluated against.

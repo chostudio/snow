@@ -60,6 +60,10 @@ Cross-cutting: **[docs/validation.md](docs/validation.md)** — what is actually
 proven, what is not, and which claims you may not make. Read it before you
 write anything user-facing about accuracy.
 
+Planned, not built: **[docs/training.md](docs/training.md)** — the design for
+the learned half (airborne segmenter, trick classifier). Nothing in it exists
+in the repo yet; do not treat it as describing current behaviour.
+
 ## Artifacts on disk
 
 Everything under `data/` is gitignored. For a clip named `run1`:
