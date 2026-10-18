@@ -7,6 +7,7 @@ import { f1, timecode } from './lib/format'
 import VideoStage, { type OverlayFlags } from './components/VideoStage'
 import TelemetryTimeline from './components/TelemetryTimeline'
 import MetricTiles from './components/MetricTiles'
+import SpinCounter from './components/SpinCounter'
 import CoachPanel from './components/CoachPanel'
 import EventList from './components/EventList'
 import PipelineBar from './components/PipelineBar'
@@ -210,6 +211,8 @@ function Review({
               </div>
             </div>
           </div>
+
+          <SpinCounter session={session} frame={frame} onSeek={(f) => { clock.pause(); seekFrame(f) }} />
 
           <div className="card">
             <div className="card-head">

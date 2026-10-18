@@ -293,3 +293,10 @@ h1, h2, h3, h4 { margin: 0; font-weight: 600; }
     --series-3: #1baf7a;
   }
 }
+
+.spin-readout { display: flex; align-items: baseline; gap: 8px; margin-bottom: 8px; flex-wrap: wrap; }
+.spin-big { font-size: 40px; font-weight: 700; line-height: 1; font-variant-numeric: tabular-nums; color: var(--series-3); }
+.spin-unit { font-size: 14px; color: var(--ink-2); }
+.spin-deg { font-size: 14px; color: var(--ink-muted); font-variant-numeric: tabular-nums; }
+.spin-state { margin-left: auto; font-size: 12px; color: var(--ink-muted); }
+.spin-state[data-live='true'] { color: var(--series-1); font-weight: 600; }
