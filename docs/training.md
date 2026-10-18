@@ -228,8 +228,10 @@ dropped if its data is too thin without taking the rest down with it.
 
 ## Synthetic ground truth in Omniverse
 
-> **Status: planned, not built.** Agreed direction for the next phase. It
-> slots in *before* step 2 above, and changes what step 5 trains on.
+> **Status: built** as `snow synth`, see [synthetic.md](synthetic.md), with
+> results in [validation.md](validation.md). It slots in *before* step 2
+> above, and changes what step 5 trains on. The published table is from
+> Blender renders; the Replicator renderer is written and unverified.
 
 ### What Omniverse is for here, and what it is not
 
@@ -343,9 +345,10 @@ was found, which is why the tricks are generated. Leads worth knowing:
 ### Order of work
 
 1. ~~Remove the camera rotation from the USD export~~ (done, see above).
-2. Generate and render about 20 parametric tricks covering flat, cork and
+2. ~~Generate and render about 20 parametric tricks covering flat, cork and
    double cork at 360 to 1440; run them through the pipeline; publish the
-   error table in [validation.md](validation.md).
+   error table in [validation.md](validation.md)~~ (done, Blender renders;
+   see [synthetic.md](synthetic.md)).
 3. Let that table decide which heads need learning and which are
    measurements.
 4. Scale the synthetic set, pre-train the segmenter and classifier on its NIM

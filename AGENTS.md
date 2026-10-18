@@ -54,6 +54,7 @@ alone. That is the main reason the pipeline is debuggable, so preserve it.
 | `src/snow/meta.py` | per-clip metadata (`fps`, `slowmo_factor`, crop plan) | — |
 | `src/snow/config.py` | paths, endpoint settings, `.env` loading | — |
 | `src/snow/cli.py` | argparse surface for every stage | — |
+| `src/snow/synth/` | synthetic tricks with exact labels: Nova-77 rider in Blender, renders, comparison | [docs/synthetic.md](docs/synthetic.md) |
 | `web/` | review dashboard + session exporter | [web/README.md](web/README.md) |
 
 Cross-cutting: **[docs/validation.md](docs/validation.md)** — what is actually
@@ -63,10 +64,11 @@ write anything user-facing about accuracy.
 Planned, not built: **[docs/training.md](docs/training.md)** — the design for
 the learned half (airborne segmenter, trick classifier, judging score). Nothing in it exists
 in the repo yet; do not treat it as describing current behaviour. Its
-**Synthetic ground truth in Omniverse** section is the agreed next direction:
-render parametric tricks with Replicator, run them through the unchanged
-pipeline, and use the exact labels to validate spin counts and to train on
-NIM output (never on clean rig skeletons).
+**Synthetic ground truth in Omniverse** section is now built, as
+`snow synth` ([docs/synthetic.md](docs/synthetic.md)): parametric tricks on a
+rider rigged as the NIM's own 77-joint skeleton, rendered and run through the
+unchanged pipeline. The published table comes from Blender renders; the
+Replicator renderer is written but has not run on an RTX machine yet.
 
 ## Artifacts on disk
 
@@ -86,6 +88,8 @@ Everything under `data/` is gitignored. For a clip named `run1`:
 | `data/poses/run1.features.{csv,parquet,json}` | features | the measurements |
 | `data/poses/run1.usda` | usd | the skeletal animation |
 | `web/public/sessions/run1/` | `export_session.py` | `session.json` + `clip.mp4` |
+| `data/synth/<clip>/` | `snow synth` | trick, exact labels, ground truth, scene USD, render |
+| `data/poses/<clip>-oracle.*` | `snow synth prepare` | ground truth in the NIM's schema, through `features` |
 
 ## Invariants
 
@@ -114,8 +118,10 @@ Each is load-bearing and each is explained in the linked doc.
    fps and the timestamps lie; the factor cannot be recovered from the file.
    Anything per-second is wrong by that factor unless `slowmo_factor` is set.
    → `docs/footage.md`
-9. **Absolute spin counts are unvalidated on real footage.** Synthetic motion
-   is exact; one real clip shows an open discrepancy. → `docs/validation.md`
+9. **Absolute spin counts are unvalidated on real footage, and measured
+   wrong on synthetic corks.** `axis_spin_deg` undercounts corks even on an
+   exact skeleton, and the dashboard's direction is always
+   "counter-clockwise". → `docs/validation.md`
 
 ## Secrets
 
@@ -138,7 +144,7 @@ git diff --cached | grep -niE "nvapi-|api[_-]key|secret|bearer"
 ```bash
 source .venv/bin/activate
 snow doctor                 # tools, packages, vendored client, endpoint, key
-python -m pytest -q         # 34 tests, ~3s, no network and no GPU
+python -m pytest -q         # 68 tests, ~20s, no network and no GPU
 ```
 
 The venv is pinned to **Python 3.12**: the NVIDIA client supports 3.10–3.12
@@ -155,7 +161,7 @@ TypeScript and must stay console-clean.
 ### Testing
 
 Tests are fast, hermetic and run without the NIM. The suite is the real
-specification for four things:
+specification for five things:
 
 - `tests/test_bbox_format.py` — parses our annotation with **NVIDIA's own
   reader**, not a reimplementation of it.
@@ -167,6 +173,9 @@ specification for four things:
 - `tests/test_usd_camera.py` — a rider fixed in the world under a panning
   camera and a cut: the exported root must hold still within each shot and
   never carry one shot's pan into the next.
+- `tests/test_synth.py` — synthetic tricks really have the inversions their
+  names claim, labels are measured from motion, and ground truth in the NIM's
+  schema obeys the same forward kinematics as the NIM's own output.
 
 When you change measurement code, add the synthetic case that pins the
 property, not a regression test against whatever number it printed today.
