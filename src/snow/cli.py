@@ -456,6 +456,47 @@ def cmd_run(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_synth(args: argparse.Namespace) -> int:
+    """The synthetic ground-truth loop; see docs/synthetic.md."""
+    from .synth import compare, steps
+
+    cfg.ensure_dirs()
+    if args.step == "plan":
+        for clip in steps.plan(args.seed):
+            labels = json.loads((clip / "labels.json").read_text())
+            print(f"{clip.name:28s} {labels['inversions']} inversion(s), "
+                  f"axis spin {labels['axis_spin_deg']:.0f}deg, "
+                  f"{labels['camera_angle']}, {labels['slowmo_factor']:g}x")
+        return 0
+    selected = steps.clips(args.only)
+    if not selected:
+        print("no synthetic clips; run `snow synth plan` first", file=sys.stderr)
+        return 1
+    if args.step in ("render", "all"):
+        for clip in selected:
+            print(f"rendering {clip.name}")
+            steps.render(clip, args.width, args.height, args.samples)
+            steps.encode(clip)
+    if args.step == "encode":
+        for clip in selected:
+            steps.encode(clip, args.renderer)
+            print(f"encoded {clip.name} from {args.renderer} frames")
+    if args.step in ("prepare", "all"):
+        for clip in selected:
+            print(f"ground truth + oracle for {clip.name}")
+            steps.prepare(clip)
+    if args.step in ("pipeline", "all"):
+        steps.pipeline_all(selected, args.spacing)
+    if args.step in ("compare", "all"):
+        rows = steps.results(selected)
+        for by in ("true_kind", "true_camera_angle"):
+            for variant in ("oracle", "pipeline"):
+                print(f"\n{variant}, by {by.replace('true_', '')}")
+                print(compare.table([r for r in rows if r["variant"] == variant], by))
+        print("\n" + compare.per_clip(rows))
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="snow",
@@ -608,6 +649,22 @@ def build_parser() -> argparse.ArgumentParser:
     p_run.add_argument("--recompute-camera", action="store_true")
     p_run.add_argument("--real-time", action="store_true")
     p_run.set_defaults(func=cmd_run)
+
+    p_synth = sub.add_parser(
+        "synth", help="synthetic tricks with exact labels: plan, render, compare"
+    )
+    p_synth.add_argument("step", choices=["plan", "render", "encode", "prepare",
+                                          "pipeline", "compare", "all"])
+    p_synth.add_argument("--renderer", choices=["blender", "replicator"], default="blender",
+                         help="whose frames `encode` uses")
+    p_synth.add_argument("--only", nargs="+", help="clip name prefixes, e.g. synth14")
+    p_synth.add_argument("--seed", type=int, default=0)
+    p_synth.add_argument("--width", type=int, default=1280)
+    p_synth.add_argument("--height", type=int, default=720)
+    p_synth.add_argument("--samples", type=int, default=16, help="EEVEE samples")
+    p_synth.add_argument("--spacing", type=float, default=120.0,
+                         help="minimum seconds between NIM calls")
+    p_synth.set_defaults(func=cmd_synth)
 
     return parser
 
