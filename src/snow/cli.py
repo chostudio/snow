@@ -397,10 +397,13 @@ def cmd_features(args: argparse.Namespace) -> int:
     print(f"\n{summary['tracked_frames']}/{summary['frames']} frames with a body frame")
     print(f"  real fps {summary['real_fps']:.1f} (slow motion {summary['slowmo_factor']}x)")
     for seg in summary["segments"]:
+        # A segment too short to have a dominant axis reports its tilt as None.
+        tilt = seg["spin_axis_tilt_deg"]
+        axis = f"{tilt:.0f}deg off vertical" if tilt is not None else "no dominant axis"
         print(
             f"  segment {seg['segment']}: {seg['tracked_frames']} frames | "
             f"axis spin {seg['axis_spin_deg']:+.0f}deg "
-            f"(axis {seg['spin_axis_tilt_deg']:.0f}deg off vertical) | "
+            f"({axis}) | "
             f"vertical yaw {seg['net_spin_deg']:+.0f}deg | "
             f"total path {seg['total_rotation_deg']:.0f}deg | "
             f"max tilt {seg['max_tilt_deg']:.0f}deg | "
