@@ -40,14 +40,33 @@ quaternion  (x, y, z, w)  -> (x, -y, -z, w)
 `tests/test_crop_and_usd.py` pins that these are the *same* rotation expressed
 two ways, which is the part that is easy to get subtly wrong.
 
-### Not yet camera-compensated
+### Camera compensation, one world frame per shot
 
-The export converts axes only. It does **not** subtract the camera rotation
-`features.py` estimates, so the animation is in the broadcast camera's frame:
-when the camera pans, the rider appears to turn with it. Fine for eyeballing
-pose; wrong as a world-frame reference. Fixing it (apply the inverse camera
-rotation from `<name>.camera.npz` to the root, per segment) is the first step
-of the synthetic-validation plan in [training.md](training.md#synthetic-ground-truth-in-omniverse).
+The NIM reports the root in the broadcast camera's frame, so a raw export
+turns the rider with every pan. `snow usd` loads the camera track from
+`data/poses/<name>.camera.npz` (estimating and caching it if absent, exactly
+as `snow features` does) and applies its inverse to the root: rotation and
+translation both, because a camera turning about its own centre moves where
+the rider appears as well as which way they face.
+
+Only the root changes. Every other joint rotation is parent-relative and does
+not depend on where the camera points. `joint_rotations[0]` and
+`root_pose.rotation` are replaced together, so the root is still rotated once.
+
+**Never across a cut** (invariant 6). Each shot's world frame is its own first
+frame, and the compensation is rebased at every segment start rather than
+trusting the track to have been reset, so one shot's pan cannot leak into the
+next. The rider's orientation jumps at a cut in the export; that jump is
+honest, because the two shots share no reference frame.
+
+A camera track shorter than the poses is refused rather than half-applied.
+`--no-camera` keeps the old camera-frame export.
+
+`tests/test_usd_camera.py` pins it: a rider fixed in the world, a camera that
+pans 60° then cuts to a second camera panning on a tilted axis. The exported
+root is constant within each shot, including when the input track
+(wrongly) accumulates across the cut, and USD's own skinning resolver agrees
+that the skeleton holds still in world space.
 
 ## Written as text
 

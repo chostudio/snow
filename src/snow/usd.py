@@ -14,6 +14,15 @@ The mapping is a close fit, because the NIM already returns what
 * ``root_pose.translation`` drives the SkelRoot's own xform — standard root
   motion, and far smaller than authoring 77 translations per frame.
 
+The NIM reports the root in **camera** coordinates, and a broadcast camera
+pans to follow the rider, so an uncompensated export turns the rider with the
+camera. Given a camera track (``<name>.camera.npz``, see ``camera.py``), the
+inverse camera rotation is applied to the root, rotation and translation both,
+so the animation is in a world frame instead. Each shot gets its own world
+frame (its first frame's camera orientation) and the compensation is rebased
+at every cut: no rotation exists between two different cameras, so carrying
+one shot's pan into the next would invent a turn the rider never made.
+
 Coordinates are converted from the NIM's camera frame (X right, **Y down**,
 Z forward — verified against the data) to USD's Y-up right-handed frame by
 ``(x, -y, -z)``, which is a 180 degree turn about X. The same turn applied to
@@ -27,6 +36,7 @@ from pathlib import Path
 
 import numpy as np
 
+from .camera import CameraTrack
 from .meta import ClipMeta
 from .skeleton import PARENTS
 
@@ -49,6 +59,79 @@ def to_usd_quat(quat) -> tuple[float, float, float, float]:
     """(x, y, z, w) in camera frame -> (w, x, y, z) in USD frame."""
     x, y, z, w = quat
     return (float(w), float(x), float(-y), float(-z))
+
+
+def quat_from_matrix(rotation: np.ndarray) -> np.ndarray:
+    """A rotation matrix as a unit quaternion (x, y, z, w), the NIM's order."""
+    m = rotation
+    trace = np.trace(m)
+    if trace > 0:
+        s = 2.0 * np.sqrt(trace + 1.0)
+        q = [(m[2, 1] - m[1, 2]) / s, (m[0, 2] - m[2, 0]) / s,
+             (m[1, 0] - m[0, 1]) / s, 0.25 * s]
+    elif m[0, 0] > m[1, 1] and m[0, 0] > m[2, 2]:
+        s = 2.0 * np.sqrt(1.0 + m[0, 0] - m[1, 1] - m[2, 2])
+        q = [0.25 * s, (m[0, 1] + m[1, 0]) / s,
+             (m[0, 2] + m[2, 0]) / s, (m[2, 1] - m[1, 2]) / s]
+    elif m[1, 1] > m[2, 2]:
+        s = 2.0 * np.sqrt(1.0 + m[1, 1] - m[0, 0] - m[2, 2])
+        q = [(m[0, 1] + m[1, 0]) / s, 0.25 * s,
+             (m[1, 2] + m[2, 1]) / s, (m[0, 2] - m[2, 0]) / s]
+    else:
+        s = 2.0 * np.sqrt(1.0 + m[2, 2] - m[0, 0] - m[1, 1])
+        q = [(m[0, 2] + m[2, 0]) / s, (m[1, 2] + m[2, 1]) / s,
+             0.25 * s, (m[1, 0] - m[0, 1]) / s]
+    q = np.asarray(q)
+    return q / np.linalg.norm(q)
+
+
+def quat_multiply(a, b) -> np.ndarray:
+    """Hamilton product ``a * b`` of (x, y, z, w) quaternions: b first, then a."""
+    ax, ay, az, aw = a
+    bx, by, bz, bw = b
+    return np.array([
+        aw * bx + ax * bw + ay * bz - az * by,
+        aw * by - ax * bz + ay * bw + az * bx,
+        aw * bz + ax * by - ay * bx + az * bw,
+        aw * bw - ax * bx - ay * by - az * bz,
+    ])
+
+
+def camera_to_world(camera: CameraTrack, frame_id: int) -> np.ndarray:
+    """Rotation taking frame ``frame_id``'s camera coordinates to its shot's world.
+
+    ``camera.rotations`` maps world -> camera, so the inverse is its transpose.
+    It is rebased on the shot's first frame here rather than trusted to have
+    been reset at the cut, so a track that accumulated across one still
+    cannot leak a previous shot's pan into this shot.
+    """
+    segment = camera.segment[frame_id]
+    start = int(np.argmax(camera.segment == segment))
+    relative = camera.rotations[frame_id] @ camera.rotations[start].T
+    return relative.T
+
+
+def compensate(det: dict, camera: CameraTrack, frame_id: int) -> dict:
+    """A detection with the camera's rotation removed from its root.
+
+    Only the root moves: every other joint rotation is parent-relative, so it
+    is unaffected by where the camera points. ``joint_rotations[0]`` is the
+    root rotation (the same value as ``root_pose.rotation``), so both are
+    replaced together and the root is still rotated exactly once.
+    """
+    inverse = camera_to_world(camera, frame_id)
+    q_inverse = quat_from_matrix(inverse)
+    root = quat_multiply(q_inverse, det["joint_rotations"][0])
+    translation = inverse @ np.asarray(det["root_pose"]["translation"], dtype=float)
+    return {
+        **det,
+        "joint_rotations": [root.tolist(), *det["joint_rotations"][1:]],
+        "root_pose": {
+            **det["root_pose"],
+            "translation": translation.tolist(),
+            "rotation": root.tolist(),
+        },
+    }
 
 
 def _matrix(translation) -> str:
@@ -76,8 +159,12 @@ def export(
     meta: ClipMeta,
     tracking_id: int = 1,
     real_time: bool = False,
+    camera: CameraTrack | None = None,
 ) -> dict:
-    """Write a .usda for one tracked body. Returns a short report."""
+    """Write a .usda for one tracked body. Returns a short report.
+
+    Without ``camera`` the animation stays in the broadcast camera's frame.
+    """
     frames: dict[int, dict] = {}
     rest: np.ndarray | None = None
     with poses.open() as fh:
@@ -94,6 +181,18 @@ def export(
                     rest = np.asarray(det["rest_pose"], dtype=float)
     if not frames or rest is None:
         raise ValueError(f"{poses.name}: no detections for tracking id {tracking_id}")
+
+    if camera is not None:
+        beyond = [f for f in frames if f >= camera.frames]
+        if beyond:
+            # Compensating some frames and not others would splice two
+            # reference frames into one animation, which plays plausibly.
+            raise ValueError(
+                f"camera track covers {camera.frames} frames but poses reach "
+                f"frame {max(beyond)}; re-estimate it with `snow features "
+                f"--recompute-camera`"
+            )
+        frames = {f: compensate(det, camera, f) for f, det in frames.items()}
 
     paths = joint_paths()
     count = len(paths)
@@ -123,7 +222,8 @@ def export(
         f"    timeCodesPerSecond = {fps:g}",
         f"    startTimeCode = {ordered[0]}",
         f"    endTimeCode = {ordered[-1]}",
-        f'    doc = "snow: NVIDIA 3D Body Pose, clip {meta.name}, track {tracking_id}"',
+        f'    doc = "snow: NVIDIA 3D Body Pose, clip {meta.name}, track {tracking_id}, '
+        f'{"camera-compensated, one world frame per shot" if camera is not None else "camera frame"}"',
         ")",
         "",
         'def SkelRoot "Rider" (',
@@ -179,5 +279,8 @@ def export(
         "frames": len(ordered),
         "frame_range": (ordered[0], ordered[-1]),
         "fps": fps,
+        "camera_compensated": camera is not None,
+        "segments": len({int(camera.segment[f]) for f in ordered})
+        if camera is not None else None,
         "size_mb": round(dest.stat().st_size / 1024 / 1024, 2),
     }

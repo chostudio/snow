@@ -29,7 +29,7 @@ source video
               ├─ crop ──── optional: reframe onto the rider
               └─ pose ──── the NIM → 77-joint 3D skeleton per frame
                    ├─ features ── camera-compensated rotation → CSV/Parquet
-                   ├─ usd ─────── UsdSkelAnimation for Omniverse
+                   ├─ usd ─────── UsdSkelAnimation for Omniverse, camera removed
                    └─ web/tools/export_session.py → the dashboard's bundle
 ```
 
@@ -82,7 +82,7 @@ Everything under `data/` is gitignored. For a clip named `run1`:
 | `data/clips/run1.zoom.mp4`, `.zoom.bbox.txt`, `.crop.json` | crop | reframed clip, remapped boxes, the plan |
 | `data/poses/run1.json` | pose | **JSON Lines**, one object per frame |
 | `data/poses/run1.overlay.mp4` | pose | `--overlay` render |
-| `data/poses/run1.camera.npz` | features | cached camera track |
+| `data/poses/run1.camera.npz` | features, usd | cached camera track |
 | `data/poses/run1.features.{csv,parquet,json}` | features | the measurements |
 | `data/poses/run1.usda` | usd | the skeletal animation |
 | `web/public/sessions/run1/` | `export_session.py` | `session.json` + `clip.mp4` |
@@ -138,7 +138,7 @@ git diff --cached | grep -niE "nvapi-|api[_-]key|secret|bearer"
 ```bash
 source .venv/bin/activate
 snow doctor                 # tools, packages, vendored client, endpoint, key
-python -m pytest -q         # 27 tests, ~3s, no network and no GPU
+python -m pytest -q         # 34 tests, ~3s, no network and no GPU
 ```
 
 The venv is pinned to **Python 3.12**: the NVIDIA client supports 3.10–3.12
@@ -155,7 +155,7 @@ TypeScript and must stay console-clean.
 ### Testing
 
 Tests are fast, hermetic and run without the NIM. The suite is the real
-specification for three things:
+specification for four things:
 
 - `tests/test_bbox_format.py` — parses our annotation with **NVIDIA's own
   reader**, not a reimplementation of it.
@@ -164,6 +164,9 @@ specification for three things:
   directions.
 - `tests/test_crop_and_usd.py` — crop coordinate round-trips, and the USD is
   validated with **USD's own skinning resolver** when `usd-core` is installed.
+- `tests/test_usd_camera.py` — a rider fixed in the world under a panning
+  camera and a cut: the exported root must hold still within each shot and
+  never carry one shot's pan into the next.
 
 When you change measurement code, add the synthetic case that pins the
 property, not a regression test against whatever number it printed today.

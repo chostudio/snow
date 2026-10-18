@@ -314,16 +314,13 @@ video at all rather than export skeletons.
   measurements (round to the nearest 180, threshold tilt), not learned heads.
   Spend the learning on the segmenter, grabs, and robustness to bad frames.
 
-### Prerequisite: the USD export is still in the camera frame
+### Prerequisite: the USD export is in a world frame (done)
 
-`src/snow/usd.py` converts the NIM's camera axes to Y-up and nothing else. It
-does **not** subtract the camera rotation that `features.py` estimates, so in
-Omniverse the rider turns with the broadcast camera's pan, which is the same
-error that moved a measured axis from 67° to 33° once corrected. Before USD
-is used as a world-frame reference (for overlaying a reconstruction against
-its synthetic ground truth, say), apply the inverse camera rotation from
-`data/poses/<name>.camera.npz` to the root, per segment, never across a cut
-(invariant 6). See [usd.md](usd.md).
+`snow usd` now removes the camera rotation that `features.py` estimates,
+applying the inverse from `data/poses/<name>.camera.npz` to the root, rebased
+per segment and never across a cut (invariant 6). Uncompensated, the rider
+turned with the broadcast camera's pan in Omniverse, the same error that
+moved a measured axis from 67° to 33° once corrected. See [usd.md](usd.md).
 
 ### Existing data
 
@@ -345,7 +342,7 @@ was found, which is why the tricks are generated. Leads worth knowing:
 
 ### Order of work
 
-1. Remove the camera rotation from the USD export (prerequisite above).
+1. ~~Remove the camera rotation from the USD export~~ (done, see above).
 2. Generate and render about 20 parametric tricks covering flat, cork and
    double cork at 360 to 1440; run them through the pipeline; publish the
    error table in [validation.md](validation.md).
@@ -359,20 +356,78 @@ was found, which is why the tricks are generated. Leads worth knowing:
 > **Status: planned, not built.** Model C. Depends on A (where the airs are)
 > and B (what they were), so it is built last.
 
+### What the rules actually say
+
+Checked against the primary sources on 2026-10-18, because broadcast
+explainers disagree (some list four lettered criteria, some five, some imply
+weights). The binding text is the **FIS ICR Snowboard / Freestyle / Freeski
+2026/27** (edition June 2026), rules 3400 to 3502, which makes the **Park &
+Pipe Judges Handbook** (current edition, posted 2024-09-24) "an integral part
+of the ICR".
+
+- **Five criteria, and no weights.** Execution, Difficulty, Amplitude,
+  Variety, Progression (ICR 3402). The handbook (rule 8): "All criteria are
+  considered equally and are not in any particular order." There is no
+  formula; each judge gives one holistic **Overall Impression** score.
+- **Landing is not a criterion.** It sits inside Execution ("takeoff, grabs,
+  air control, flow, style, and landing"), plus deductions for mistakes on
+  snow, taken off the score the run would otherwise have earned
+  (handbook 11): big air 1 to 30, halfpipe 1 to 25, slopestyle 1 to 20 per
+  judge.
+- **DEAL and DAVE are TV graphics.** Big air judges also enter Difficulty,
+  Execution, Amplitude, Landing (DEAL) and halfpipe judges Difficulty,
+  Amplitude, Variety, Execution (DAVE), each 1 to 10, averaged "and displayed
+  only for TV Graphics. DEAL scores do not affect the Overall Impression
+  scores" (handbook 9.3, 9.4). This is most likely where the explainers'
+  disagreement comes from: they describe the on-screen breakdown, not the
+  score.
+- **Scoring.** Integer 0 to 100 per judge, three to seven judges; with six or
+  more the high and low are dropped, otherwise all count; the average is
+  truncated to two decimals (ICR 3403, 3403.2).
+- **The only numeric weight** is slopestyle section-by-section judging:
+  trick judges 60%, composition judges 40%, and even that is "recommended"
+  (ICR 3403.3); section values can also differ per event.
+- **Big air variety is a counting rule, not a judged score.** Two best of
+  three jumps count, and the two must be different types (ICR 3502.3.1):
+  either clockwise vs counterclockwise, or one of four directions (frontside,
+  backside, switch frontside, switch backside), chosen at the team captains'
+  meeting. Flips with 180° or more of added rotation count as rotational
+  tricks. A repeated type keeps only its higher score.
+- **Scores are relative by design.** Judges set below-average, average and
+  above-average ranges from practice "for that course on that day", and the
+  first five to ten scores become anchors (handbook 9.1).
+- **No reputation.** Judges score "without regard to past impressions" or
+  national affiliation (handbook 1).
+
+What this changes below: there is no official weighting to reproduce, so
+layer 1 does not invent one, and any weights layer 2 learns are an empirical
+finding about panels, not a check against the rulebook.
+
+Sources: [ICR 2026/27](https://assets.fis-ski.com/f/252177/x/74599b71fa/sbfsfk-new-icr-spring-2026_clean.pdf),
+[Park & Pipe Judges Handbook](https://assets.fis-ski.com/f/252177/7c81eac52f/fis_sb_fk-judgeshandbook_update_spring-2022.pdf)
+(the filename says 2022; the FIS document library lists it as 2024-09-24),
+[FIS snowboard documents](https://www.fis-ski.com/inside-fis/sbfsfk-documents).
+
 ### Two layers, so the number can always be explained
 
 **Layer 1: a transparent rubric.** No training. Each trick gets component
-scores that mirror how freestyle contests are judged (difficulty, execution,
-amplitude, landing; halfpipe adds variety across the run), each computed from
-signals the pipeline already has or will have:
+scores named after the official criteria (see above), each computed from
+signals the pipeline already has or will have. Components are shown side by
+side and never summed with invented weights:
 
 | component | from | trust |
 |---|---|---|
 | difficulty | B's heads: rotation, axis, direction, switch, grab; a lookup table, harder = higher | as good as B |
 | execution | grab held (fraction of the air with `grab_distance` under a torso-normalised threshold), body stability in the air, `confidence` dips | relative only |
-| landing | post-landing jitter of root and torso, hand-to-snow contact, axis tilt at touchdown | relative only |
+| deductions | landing faults on snow: post-landing jitter of root and torso, hand-to-snow contact, axis tilt at touchdown; banded like the handbook's small, medium and major | relative only |
 | amplitude | air duration in real time, peak height in torso lengths | **weak**; see below |
-| variety (run) | distinct directions and axes across the run's tricks | as good as B |
+| variety (run) | distinct directions and axes across the run's tricks; for big air, whether the two best jumps are different types under ICR 3502.3.1 | as good as B |
+| progression | not computed: "new or rare for that level" needs knowledge of the field, not of the clip | absent |
+
+Landing is a deduction, not its own criterion, because that is how the rules
+treat it. The big air variety rule is a hard counting rule, so it decides
+which two jumps count before any score is combined, and it needs only the
+rotation direction (the sign of the spin about the trick's axis) from B.
 
 The rubric is the explanation the dashboard shows. It is not claimed to
 predict a real score.
@@ -398,9 +453,9 @@ actually measured. Add halfpipe only once missing hits can be handled
 
 Hundreds of scored runs, not tens of thousands, so keep it small and
 interpretable: ridge regression or gradient-boosted trees over layer 1's
-components, never a deep net on raw pose. Feature importances then double as
-a check that the model weighs difficulty and landing the way judging rules
-say it should.
+components, never a deep net on raw pose. The rules publish no weights, so
+the learned ones are a finding about how panels behave, worth reporting; they
+cannot be checked against the rulebook.
 
 ### The decisions worth arguing about
 
@@ -408,8 +463,8 @@ say it should.
   first rider anchors the panel and scores drift between events. Normalise
   within each contest (z-score, or train a pairwise ranking loss) and report
   ranking quality, not only absolute error.
-- **The ceiling is judge disagreement.** Panels drop the highest and lowest
-  of six scores precisely because judges disagree. Measure that spread on the
+- **The ceiling is judge disagreement.** Panels of six or more drop the
+  highest and lowest score precisely because judges disagree. Measure that spread on the
   same data; a model whose error is inside it is performing like an
   additional judge, and nothing better is achievable.
 - **Split by contest**, never by run: riders, panels and conditions repeat

@@ -195,7 +195,7 @@ Read it before you quote a number.
 src/snow/           the pipeline, one module per stage
 web/                review dashboard (React) + session exporter
 docs/               the deep dives above
-tests/              27 tests, ~3s, no network and no GPU
+tests/              34 tests, ~3s, no network and no GPU
 scripts/setup.sh    venv, deps, vendored NVIDIA client
 vendor/             upstream NVIDIA gRPC client (cloned, gitignored)
 data/               clips, tracks, poses (gitignored)

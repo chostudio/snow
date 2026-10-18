@@ -332,6 +332,35 @@ def cmd_crop(args: argparse.Namespace) -> int:
     return 0
 
 
+def _camera_track(args: argparse.Namespace) -> "cam.CameraTrack | None":
+    """The clip's camera track: cached in <name>.camera.npz, estimated if absent."""
+    if getattr(args, "no_camera", False):
+        return None
+    video = cfg.clip_path(args.name)
+    cache = cfg.POSES_DIR / f"{args.name}.camera.npz"
+    if cache.exists() and not getattr(args, "recompute_camera", False):
+        track = cam.CameraTrack.load(cache)
+        print(f"reusing camera track from {cache.name}")
+    else:
+        print(f"estimating camera motion from {video.name}")
+        _, boxes = cp.read_bbox_file(cfg.bbox_path(args.name))
+        merged = {}
+        for per_track in boxes.values():
+            merged.update(per_track)
+        track = cam.estimate(video, boxes=merged)
+        track.save(cache)
+    info = cam.summarize(track)
+    print(f"  {info['segments']} camera segment(s), focal {info['focal']:.0f}px")
+    for detail in info["detail"][:6]:
+        print(
+            f"    seg {detail['segment']}: frames "
+            f"{detail['start_frame']}-{detail['end_frame']}, camera turned "
+            f"{detail['camera_rotation_deg']:.0f}deg, "
+            f"{detail['median_inliers']} inliers"
+        )
+    return track
+
+
 def cmd_features(args: argparse.Namespace) -> int:
     cfg.ensure_dirs()
     poses = cfg.pose_path(args.name)
@@ -339,31 +368,7 @@ def cmd_features(args: argparse.Namespace) -> int:
         print(f"missing {poses} — run `snow pose` first", file=sys.stderr)
         return 1
     clip = mt.load(args.name)
-    video = cfg.clip_path(args.name)
-
-    track = None
-    if not args.no_camera:
-        cache = cfg.POSES_DIR / f"{args.name}.camera.npz"
-        if cache.exists() and not args.recompute_camera:
-            track = cam.CameraTrack.load(cache)
-            print(f"reusing camera track from {cache.name}")
-        else:
-            print(f"estimating camera motion from {video.name}")
-            _, boxes = cp.read_bbox_file(cfg.bbox_path(args.name))
-            merged = {}
-            for per_track in boxes.values():
-                merged.update(per_track)
-            track = cam.estimate(video, boxes=merged)
-            track.save(cache)
-        info = cam.summarize(track)
-        print(f"  {info['segments']} camera segment(s), focal {info['focal']:.0f}px")
-        for detail in info["detail"][:6]:
-            print(
-                f"    seg {detail['segment']}: frames "
-                f"{detail['start_frame']}-{detail['end_frame']}, camera turned "
-                f"{detail['camera_rotation_deg']:.0f}deg, "
-                f"{detail['median_inliers']} inliers"
-            )
+    track = _camera_track(args)
 
     crop_plan = None
     plan_path = cfg.CLIPS_DIR / f"{args.name}.crop.json"
@@ -416,14 +421,20 @@ def cmd_usd(args: argparse.Namespace) -> int:
         return 1
     clip = mt.load(args.name)
     dest = cfg.POSES_DIR / f"{args.name}.usda"
+    track = _camera_track(args)
     report = usdx.export(poses, dest, clip, tracking_id=args.track_id,
-                         real_time=args.real_time)
+                         real_time=args.real_time, camera=track)
     print(f"wrote {report['path']}")
     print(
         f"  {report['joints']} joints, {report['frames']} frames "
         f"({report['frame_range'][0]}-{report['frame_range'][1]}) at "
         f"{report['fps']:g} fps, {report['size_mb']}MB"
     )
+    if report["camera_compensated"]:
+        print(f"  camera removed from the root, {report['segments']} shot(s), "
+              "each its own world frame")
+    else:
+        print("  root left in the camera's frame: it turns when the camera pans")
     print("  open in Omniverse / usdview, or import into Blender")
     return 0
 
@@ -571,6 +582,9 @@ def build_parser() -> argparse.ArgumentParser:
     p_usd.add_argument("--real-time", action="store_true",
                        help="author the timeline at real speed rather than "
                             "the clip's playback speed")
+    p_usd.add_argument("--no-camera", action="store_true",
+                       help="leave the root in the broadcast camera's frame")
+    p_usd.add_argument("--recompute-camera", action="store_true")
     p_usd.set_defaults(func=cmd_usd)
 
     p_run = sub.add_parser("run", help="ingest + track + pose in one go")
