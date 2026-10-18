@@ -49,14 +49,15 @@ The camera track is cached at `data/poses/<name>.camera.npz`;
 `--recompute-camera` forces a refit, `--no-camera` skips compensation
 entirely.
 
-## The three measures
+## The four measures
 
 No single measure covers every trick. Columns in
 `data/poses/<name>.features.csv`:
 
 | column | meaning |
 |---|---|
-| `axis_spin_deg` | rotation about the trick's **own** dominant axis — the headline number |
+| `spin_path_deg` | angular path, signed by the turn's sense about world up — **the headline number** |
+| `axis_spin_deg` | rotation about the trick's **own** dominant axis; undercounts corks |
 | `spin_deg` | cumulative yaw about the world vertical, with `spin_quality` |
 | `rotation_deg` | total angular path, axis-agnostic; counts flips too |
 | `tilt_deg` | body axis vs world vertical: 0 upright, 180 inverted |
@@ -90,6 +91,32 @@ signal, not a geometric correction**.
 
 This matters for anyone extending the maths: do not "fix" `spin_deg` by
 tilting its reference axis. The problem is conditioning, not geometry.
+
+### Why `spin_path_deg` replaced it as the headline
+
+The argument above holds for a *fixed* axis. A cork's axis is not fixed: it
+leans away from vertical through the inversions and back for the landing,
+and the rider also pitches from the kicker's angle to the landing's.
+Projecting every step onto one dominant axis drops whatever was not about
+that axis, so `axis_spin_deg` undercounts corks **even on an exact
+skeleton**. On 20 synthetic tricks it named 1 of 13 corks correctly
+([validation.md](validation.md)).
+
+`spin_path_deg` is `rotation_deg`, the total angular path, with a sign. On
+the same exact skeletons it named 20 of 20, measured over the air. The sign
+is the sense of the turn about world up (positive is counter-clockwise from
+above), taken from the rotation summed over about 15 frames either side
+rather than from each step: through an inversion the NIM's per-frame steps
+can flip sense for a stretch, which would subtract real rotation.
+
+What it gives up: like `rotation_deg` it accumulates pose jitter, which
+reads as a few degrees of rotation per frame even when the rider is still.
+Measure it over an air, as the dashboard does, not over a whole clip. It
+also cannot tell a spin from a flip; it counts both.
+
+`axis_spin_deg` is kept, now signed the same way (its axis is pointed up,
+so it no longer reads every spin as counter-clockwise), and its axis still
+gives `spin_axis_tilt_deg`.
 
 ### Tilt
 

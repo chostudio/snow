@@ -109,7 +109,11 @@ def features_path(name: str) -> Path:
 # Which rotation column to put on screen, best first. `spin_deg` (yaw about
 # world vertical) is deliberately not in this list as the headline: it
 # degenerates exactly when a trick is corked, which is when it matters.
+# `axis_spin_deg` was the headline until synthetic tricks with exact labels
+# showed it undercounts corks even on perfect poses (docs/validation.md);
+# the signed angular path counts them, and its sign is the turn's sense.
 ROTATION_PREFERENCE = [
+    ("spin_path_deg", "signed angular path, camera removed"),
     ("axis_spin_deg", "rotation about the trick's own axis"),
     ("rotation_deg", "total angular path, all axes"),
 ]
@@ -302,8 +306,10 @@ def find_events(recs: list[dict], real_fps: float, fps: float) -> list[dict]:
             "metrics": {
                 "rotation_deg": round(rot, 1),
                 "nearest_spin_deg": int(round(abs(rot) / 180.0) * 180),
-                # Sign is the right-hand rule about the rider's own up axis.
-                # Frontside/backside needs the rider's stance, which pose alone
+                # Sign is the right-hand rule about world up when the rotation
+                # comes from `snow features` (counter-clockwise from above is
+                # positive), about the rider's own up axis in the display
+                # shim. Frontside/backside needs the rider's stance, which pose alone
                 # does not give, so this stays a geometric statement.
                 "direction": "counter-clockwise" if rot > 0 else "clockwise",
                 "peak_rpm": round(float(rpms[peak_i]), 1),

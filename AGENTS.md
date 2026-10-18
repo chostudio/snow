@@ -118,10 +118,11 @@ Each is load-bearing and each is explained in the linked doc.
    fps and the timestamps lie; the factor cannot be recovered from the file.
    Anything per-second is wrong by that factor unless `slowmo_factor` is set.
    → `docs/footage.md`
-9. **Absolute spin counts are unvalidated on real footage, and measured
-   wrong on synthetic corks.** `axis_spin_deg` undercounts corks even on an
-   exact skeleton, and the dashboard's direction is always
-   "counter-clockwise". → `docs/validation.md`
+9. **Absolute spin counts are unvalidated on real footage.** The headline
+   is `spin_path_deg`: it names 20 of 20 synthetic tricks on exact poses,
+   but through the NIM corks still fail, because the NIM misses half the
+   inversions. `axis_spin_deg` undercounts corks by definition; never
+   promote it back. → `docs/validation.md`, `docs/rotation.md`
 
 ## Secrets
 
@@ -144,7 +145,7 @@ git diff --cached | grep -niE "nvapi-|api[_-]key|secret|bearer"
 ```bash
 source .venv/bin/activate
 snow doctor                 # tools, packages, vendored client, endpoint, key
-python -m pytest -q         # 68 tests, ~20s, no network and no GPU
+python -m pytest -q         # 71 tests, ~20s, no network and no GPU
 ```
 
 The venv is pinned to **Python 3.12**: the NVIDIA client supports 3.10–3.12

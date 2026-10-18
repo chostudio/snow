@@ -6,7 +6,7 @@ module builds a body frame from the 3D keypoints, removes the camera's
 rotation (see ``camera.py``), and integrates what is left into rotation
 measures that mean something.
 
-Three rotation measures are produced, because no single one covers every
+Four rotation measures are produced, because no single one covers every
 trick:
 
 ``spin_deg``
@@ -39,6 +39,21 @@ trick:
     the two agree to within a degree; on real inverted footage they diverge,
     and the divergence is a noise signal, not a geometric correction.
 
+    It undercounts corks even on exact input, though: projecting onto one
+    axis drops every rotation that was not about it, and a cork's axis moves.
+    On 20 synthetic tricks with exact skeletons it named 1 of 13 corks
+    correctly (docs/validation.md). The axis is oriented upward, so the sign
+    is the turn's sense: positive is counter-clockwise from above.
+
+``spin_path_deg``
+    ``rotation_deg`` with a sign: every step's angle, signed by the sense of
+    the turn about world up over the surrounding half second or so (a few
+    noisy frames, or a pose that flips while inverted, cannot reverse it). It counts the whole rotation a cork performs, however
+    its axis moves, and still says which way the rider turned. Over the air
+    it named 20 of 20 synthetic tricks on exact skeletons. Like
+    ``rotation_deg`` it also accumulates pose jitter, so measure it over the
+    air, not over a whole clip.
+
 ``tilt_deg``
     Angle between the rider's own up axis and the world vertical: 0 upright,
     180 fully inverted. This is what separates a cork from a flat spin.
@@ -68,6 +83,12 @@ FEET = (71, 76)
 # Y is down in the NIM's camera frame (verified against the data: the head
 # sits at negative Y relative to the pelvis), so world up is -Y.
 WORLD_UP = np.array([0.0, -1.0, 0.0])
+
+# The spin's sense comes from rotation summed over this many steps either
+# side, and only when its axis is more than ~12 degrees off horizontal (see
+# ``spin_path_deg``).
+SENSE_WINDOW = 15
+SENSE_MIN_VERTICAL = 0.2
 
 
 def correct_principal_point(
@@ -133,6 +154,39 @@ def _interpolate_angles(angles: np.ndarray, usable: np.ndarray) -> np.ndarray:
     sin = np.interp(index, index[usable], np.sin(angles[usable]))
     cos = np.interp(index, index[usable], np.cos(angles[usable]))
     return np.unwrap(np.arctan2(sin, cos))
+
+
+def _signed_path(path: np.ndarray, steps: list[tuple[int, np.ndarray]],
+                 length: int) -> np.ndarray:
+    """``rotation_deg`` signed by the sense of the turn it belongs to.
+
+    The sense is the vertical component of the rotation summed over
+    ``SENSE_WINDOW`` steps either side, not of each step: through an
+    inversion the NIM's per-frame steps can flip sense for a stretch, which
+    would subtract real rotation, while a trick turns one way throughout.
+    Where the window says nothing (rotation about a near-horizontal axis),
+    the previous sense is kept.
+    """
+    out = np.full(length, np.nan)
+    if not steps:
+        first = np.flatnonzero(np.isfinite(path))
+        out[first] = 0.0
+        return out
+    vectors = np.array([v for _, v in steps])
+    cumulative = np.vstack([np.zeros(3), np.cumsum(vectors, axis=0)])
+    signed, sense = 0.0, 1.0
+    start = steps[0][0] - 1
+    if start >= 0 and np.isfinite(path[start]):
+        out[start] = 0.0
+    for k, (position, vector) in enumerate(steps):
+        lo, hi = max(0, k - SENSE_WINDOW), min(len(steps), k + SENSE_WINDOW + 1)
+        around = cumulative[hi] - cumulative[lo]
+        vertical = float(np.dot(around, WORLD_UP))
+        if abs(vertical) >= SENSE_MIN_VERTICAL * np.linalg.norm(around) > 0:
+            sense = np.sign(vertical)
+        signed += sense * np.rad2deg(np.linalg.norm(vector))
+        out[position] = signed
+    return out
 
 
 def build(
@@ -220,6 +274,7 @@ def build(
     df["spin_deg"] = np.nan
     df["rotation_deg"] = np.nan
     df["axis_spin_deg"] = np.nan
+    df["spin_path_deg"] = np.nan
     axis_by_segment: dict[int, np.ndarray] = {}
 
     # Integrate within each camera segment: a cut gives a new world frame, so
@@ -248,7 +303,9 @@ def build(
                 steps.append((position, rotation_vector(delta)))
             path[position] = total
             previous = current
+        spin_path = _signed_path(path, steps, len(idx))
         df.loc[idx, "rotation_deg"] = path
+        df.loc[idx, "spin_path_deg"] = spin_path
 
         # The dominant axis is the direction the segment's rotation actually
         # went, so projecting each step onto it integrates the spin the way a
@@ -259,6 +316,12 @@ def build(
             norm = np.linalg.norm(net)
             if norm > 1e-9:
                 axis = net / norm
+                # Point the axis up, so the projection carries the turn's
+                # sense: counter-clockwise from above is positive. Left as
+                # the net direction, it only ever grew positive and every
+                # spin read counter-clockwise.
+                if float(np.dot(axis, WORLD_UP)) < 0:
+                    axis = -axis
                 axis_by_segment[int(segment)] = axis
                 along = np.cumsum(np.rad2deg(vectors @ axis))
             else:
@@ -290,6 +353,7 @@ def summarize(df: pd.DataFrame, meta: ClipMeta) -> dict:
         spin = valid["spin_deg"].to_numpy()
         rotation = group["rotation_deg"].dropna()
         axis_spin = group["axis_spin_deg"].dropna()
+        spin_path = group["spin_path_deg"].dropna()
         axis = df.attrs.get("spin_axes", {}).get(int(segment))
         axis_tilt = (
             float(
@@ -312,6 +376,10 @@ def summarize(df: pd.DataFrame, meta: ClipMeta) -> dict:
                 ),
                 "axis_spin_deg": round(
                     float(axis_spin.iloc[-1] - axis_spin.iloc[0]) if len(axis_spin) else 0.0,
+                    1,
+                ),
+                "spin_path_deg": round(
+                    float(spin_path.iloc[-1] - spin_path.iloc[0]) if len(spin_path) else 0.0,
                     1,
                 ),
                 "spin_axis_tilt_deg": round(axis_tilt, 1) if axis_tilt is not None else None,

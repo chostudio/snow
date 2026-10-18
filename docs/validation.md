@@ -149,6 +149,33 @@ degrees through the pipeline, and 786-1050 even on exact data. The open
 the wrong-shot explanation: the pipeline undercounts that trick
 reproducibly, for reasons 1, 4 and 5 above.
 
+### Fixed after this table: direction, and a cork-aware count
+
+Findings 1-3 are measurement definitions, so they were fixable without a
+better pose model. `features.py` now produces `spin_path_deg`, the angular
+path signed by the turn's sense about world up, and orients
+`axis_spin_deg`'s axis upward so it carries the sense too. The dashboard
+counts airs with `spin_path_deg` ([rotation.md](rotation.md)).
+
+On the same 20 clips, re-run through `snow features` and the dashboard's
+air detector (no new NIM calls):
+
+| | named spin right, before | after | direction right, before | after |
+|---|---|---|---|---|
+| exact skeleton, true camera | 7/20 | **20/20** | 11/20 | **20/20** |
+| pipeline (NIM, `camera.py`) | 3/18 | **6/18** | 9/18 | **17/18** |
+
+Through the pipeline the remaining misses are findings 4-6: missed
+inversions, `camera.py`'s over-read rotation and false cuts. No choice of
+measure recovers rotation the pose never showed. The path also accumulates
+pose jitter: through the NIM it read flat spins 5-10% high (a 360 as 395).
+
+On the real clip titled *"Frontside Double Cork 1080"*, the main air now
+reads **-998 degrees, clockwise, named 1080** (it read 668 as
+`axis_spin_deg`). That agrees with the title. It is one reading of one clip
+by a measure that over-reads flat spins by up to 10% through the NIM, so it
+is consistent with the title, not proof of it.
+
 `snow features` also crashed printing its summary when a segment had no
 dominant axis (finding 6 produces such segments); fixed in `cli.py`, no
 effect on any number.
@@ -247,10 +274,11 @@ produced no air event, so dashboard columns count 18.
 - that any length in metres is a real-world measurement
 - that a rate is real-time unless `slowmo_factor` was actually set
 - that rotation across a camera cut was measured — it was not, by design
-- that a corked trick's spin count is right: on exact synthetic input the
-  headline measure names 1 of 13 corks correctly (see above)
-- the dashboard's spin direction: it reads "counter-clockwise" whatever the
-  rider did; the sign of vertical yaw is the reliable one
+- that a corked trick's spin count is right through the pipeline: the
+  measure names corks correctly on exact poses, but the NIM misses half the
+  inversions and the pipeline named 1 of 11 corks it measured
+- that `axis_spin_deg` is a spin count: it undercounts corks even on exact
+  poses; `spin_path_deg` is the count
 
 ## Two corrections worth keeping
 

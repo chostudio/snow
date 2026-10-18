@@ -46,13 +46,18 @@ def synthetic_poses(tmp_path, total_deg: float, axis: np.ndarray, frames: int = 
     overwrites the earlier clip and makes both variables point at the same
     data.
     """
+    rotations = [axis_angle(axis, np.deg2rad(total_deg) * i / (frames - 1))
+                 for i in range(frames)]
+    return poses_from(tmp_path, rotations)
+
+
+def poses_from(tmp_path, rotations: list[np.ndarray]):
+    """A rider taking each of ``rotations`` in turn, one per frame, as JSONL."""
     _SEQUENCE[0] += 1
     path = tmp_path / f"poses_{_SEQUENCE[0]}.json"
     depth = np.array([0.0, 0.0, 6.0])
     with path.open("w") as fh:
-        for i in range(frames):
-            angle = np.deg2rad(total_deg) * i / (frames - 1)
-            rotation = axis_angle(axis, angle)
+        for i, rotation in enumerate(rotations):
             k3 = np.zeros((77, 3))
             for index, point in REST.items():
                 k3[index] = rotation @ point + depth
@@ -133,6 +138,45 @@ def test_axis_spin_survives_where_vertical_yaw_degenerates(tmp_path):
     assert df["spin_quality"].min() < 0.05
     # ...and vertical yaw does not recover the rotation.
     assert abs(segment["net_spin_deg"]) < 360.0
+
+
+@pytest.mark.parametrize("sense", [1.0, -1.0])
+def test_spin_measures_carry_the_turns_sense(tmp_path, sense):
+    """Counter-clockwise from above is positive, clockwise negative.
+
+    ``axis_spin_deg`` used to project onto its own net axis, which made it
+    grow positive whatever the rider did, and the dashboard called every
+    spin counter-clockwise.
+    """
+    up = np.array([0.0, -1.0, 0.0])
+    poses = synthetic_poses(tmp_path, sense * 720.0, up)
+    df = F.build(poses, meta())
+    segment = F.summarize(df, meta())["segments"][0]
+    assert segment["axis_spin_deg"] == pytest.approx(sense * 720.0, abs=5.0)
+    assert segment["spin_path_deg"] == pytest.approx(sense * 720.0, abs=5.0)
+    assert np.sign(segment["net_spin_deg"]) == sense
+
+
+def test_spin_path_counts_a_cork_whose_axis_moves(tmp_path):
+    """A turn whose axis swings from vertical to horizontal and back.
+
+    Projecting onto one dominant axis drops what was not about it, so
+    ``axis_spin_deg`` undercounts; the signed path counts all of it, and
+    keeps the sense through the stretch where the axis is horizontal.
+    """
+    up = np.array([0.0, -1.0, 0.0])
+    side = np.array([1.0, 0.0, 0.0])
+    frames, total = 361, 1080.0
+    rotations, current = [np.eye(3)], np.eye(3)
+    for i in range(1, frames):
+        lean = np.pi / 2 * np.sin(np.pi * i / (frames - 1)) ** 2   # 0 -> 90 -> 0 deg
+        axis = np.cos(lean) * up + np.sin(lean) * side
+        current = axis_angle(axis, np.deg2rad(total / (frames - 1))) @ current
+        rotations.append(current)
+    df = F.build(poses_from(tmp_path, rotations), meta())
+    segment = F.summarize(df, meta())["segments"][0]
+    assert segment["spin_path_deg"] == pytest.approx(total, abs=10.0)
+    assert segment["axis_spin_deg"] < total - 100.0
 
 
 def test_camera_rotation_is_removed(tmp_path):
