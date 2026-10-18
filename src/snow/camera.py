@@ -94,6 +94,14 @@ def rotation_vector(rotation: np.ndarray) -> np.ndarray:
     return axis / norm * angle
 
 
+def _colour_histogram(frame: np.ndarray) -> np.ndarray:
+    """Normalised HSV histogram of a small copy: what is in view, not where."""
+    hsv = cv2.cvtColor(cv2.resize(frame, (160, 90), interpolation=cv2.INTER_AREA),
+                       cv2.COLOR_BGR2HSV)
+    hist = cv2.calcHist([hsv], [0, 1, 2], None, [12, 6, 6], [0, 180, 0, 256, 0, 256])
+    return cv2.normalize(hist, hist).flatten()
+
+
 def estimate(
     video: Path,
     boxes: dict[int, tuple[float, float, float, float]] | None = None,
@@ -101,6 +109,8 @@ def estimate(
     max_features: int = 1200,
     min_inliers: int = 25,
     cut_difference: float = 22.0,
+    cut_histogram: float = 0.35,
+    explained_fraction: float = 0.25,
     max_rotation_deg: float = 15.0,
     mask_margin: float = 0.6,
     progress: bool = True,
@@ -131,6 +141,7 @@ def estimate(
 
     prev_gray = None
     prev_small = None
+    prev_histogram = None
     current = np.eye(3)
     segment = 0
     frame_id = 0
@@ -142,16 +153,11 @@ def estimate(
             break
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
         small = cv2.resize(gray, (320, 180), interpolation=cv2.INTER_AREA)
-
-        # A hard cut is a whole-frame change, not merely a hard estimate.
-        # Conflating the two shatters a long shot into dozens of fragments
-        # every time the tracker runs short of background texture.
-        is_cut = prev_small is not None and (
-            float(np.mean(cv2.absdiff(small, prev_small))) > cut_difference
-        )
+        histogram = _colour_histogram(frame)
 
         delta = np.eye(3)
         count = 0
+        tracked = 0
         ok_estimate = False
         if prev_gray is not None:
             mask = np.full(gray.shape, 255, dtype=np.uint8)
@@ -175,6 +181,7 @@ def estimate(
                 )
                 good_prev = prev_points[status.ravel() == 1].reshape(-1, 2)
                 good_next = next_points[status.ravel() == 1].reshape(-1, 2)
+                tracked = len(good_prev)
                 if len(good_prev) >= min_inliers:
                     homography, inlier_mask = cv2.findHomography(
                         good_prev, good_next, cv2.RANSAC, 3.0, maxIters=2000
@@ -186,6 +193,22 @@ def estimate(
                             if rotation_angle(candidate) <= max_rotation:
                                 delta = candidate
                                 ok_estimate = True
+
+        # A cut is a whole-frame change that no camera motion explains. The
+        # frame difference alone is not enough: a fast telephoto pan over
+        # banners changes as many pixels as a cut does, and split synthetic
+        # single-shot tricks into 10-17 "shots". So the change must also be
+        # unexplained by a homography (most tracked background points
+        # disagree with any single one; a pan keeps hundreds that agree)
+        # and must change what is in view, not just where (colour histogram;
+        # a pan over sparse texture can fail the first test, never this one).
+        is_cut = False
+        if prev_small is not None:
+            changed = float(np.mean(cv2.absdiff(small, prev_small))) > cut_difference
+            explained = count >= max(min_inliers, explained_fraction * tracked) and tracked > 0
+            content = float(cv2.compareHist(prev_histogram, histogram,
+                                            cv2.HISTCMP_BHATTACHARYYA)) > cut_histogram
+            is_cut = changed and not explained and content
 
         if is_cut:
             # No continuous rotation exists across a cut, so the next shot
@@ -206,6 +229,7 @@ def estimate(
 
         prev_gray = gray
         prev_small = small
+        prev_histogram = histogram
         frame_id += 1
         if progress and frame_id % 300 == 0:
             print(f"    camera: {frame_id} frames, {segment + 1} segment(s)")

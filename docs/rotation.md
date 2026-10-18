@@ -34,8 +34,8 @@ Joint indices used: `0` root, `6` neck, `67`/`72` hips, `14`/`42` wrists,
 ## Camera estimation
 
 `camera.py` fits a homography to **background** features, with the rider
-masked out, and decomposes it as `H = K R K⁻¹` — rotation about a fixed
-centre.
+masked out, and decomposes it as `H = K R K⁻¹`: rotation about a fixed
+centre, with `K` built from an assumed focal (see below).
 
 Two limits follow directly from that model, and neither is a bug to fix:
 
@@ -44,6 +44,49 @@ Two limits follow directly from that model, and neither is a bug to fix:
   recovered this way.
 - **At a hard cut there is no continuous rotation at all.** Each shot gets its
   own world frame, and a trick spanning a cut cannot be integrated across it.
+
+### What counts as a cut
+
+A frame is a cut only when three things hold together: the frame changed a
+lot (mean difference over 22 on a 320x180 copy), **no homography explains
+it** (fewer than a quarter of the tracked background points agree with the
+best one; a pan keeps hundreds that do), and **what is in view changed**
+(HSV histogram distance over 0.35; a pan over sparse texture can fail the
+second test, never this one).
+
+The difference test alone split synthetic single-shot tricks into 10-17
+"shots" during fast telephoto pans, and run1 into 17. Real cuts in run1 and
+vito score 0.51-0.95 on the histogram; the false ones scored at most 0.15.
+The trade: a cut between two shots of near-identical colour (two cameras on
+the same white slope) needs the histogram to move, and could be missed.
+`tests/test_camera_cuts.py` pins the pan-versus-cut case.
+
+### The focal length is assumed, and on a long lens that matters
+
+`K` uses `f = hypot(w, h)`, the NIM's own assumption. A broadcast camera on
+a long lens is often 2-11x that (measured on the synthetic set), and
+`H = K R K⁻¹` read with too short a focal over-reads every pan and tilt by
+about that ratio. So **`camera_rotation_deg` is uncalibrated in magnitude**,
+like metric scale.
+
+Two things were tried and are recorded so they are not re-tried blind:
+
+- **Self-calibrating `f` from the background does not work reliably here.**
+  A pan-tilt head never rolls, so the right `f` is the one that keeps the
+  image's horizontal axis level; but the roll that makes `f` observable
+  scales with the camera's tilt, and a broadcast camera is usually close to
+  level with the rider. On 20 synthetic clips it landed within 1.5x of the
+  true focal on 7.
+- **Decomposing with the true `f` is worse, not better**, through a full
+  homography: its perspective terms are tiny and noisy on a long lens, and
+  `K⁻¹ H K` multiplies them by `f`. A similarity model (shift, roll, zoom)
+  fixes that, should a known focal ever be supplied.
+
+And it barely matters for the spin itself on big air: with the **true**
+camera, spin over the air named 7 of 20 synthetic tricks through the NIM,
+against 6 with the estimated camera and 7 with no compensation at all. The
+camera turns 26-90 degrees over a whole clip, slowly beside a spin. It would
+matter more on halfpipe, where the pans are larger.
 
 The camera track is cached at `data/poses/<name>.camera.npz`;
 `--recompute-camera` forces a refit, `--no-camera` skips compensation

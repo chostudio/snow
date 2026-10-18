@@ -176,6 +176,27 @@ reads **-998 degrees, clockwise, named 1080** (it read 668 as
 by a measure that over-reads flat spins by up to 10% through the NIM, so it
 is consistent with the title, not proof of it.
 
+### Fixed after this table: false cuts
+
+Finding 6 is fixed: a cut now also needs the change to be unexplained by any
+homography and to change the frame's colour content (see
+[rotation.md](rotation.md#what-counts-as-a-cut)). All 20 synthetic clips are
+one shot again; run1 went from 17 segments to 4, at three cuts checked by eye.
+Re-scored through the pipeline: max-tilt error 46 -> 38 degrees, direction
+right 18 of 18, spin named still 6 of 18 (the NIM's missed inversions are
+the limit). Camera-rotation error rose from 56 to 71 degrees: the false cuts
+had been resetting the camera and hiding finding 5's over-read.
+
+Finding 5 is **not** fixed, deliberately. The focal cannot be recovered
+reliably from broadcast background motion, and with the true camera the
+spin over the air named 7 of 20 against 6 with the estimate
+([rotation.md](rotation.md#the-focal-length-is-assumed-and-on-a-long-lens-that-matters)).
+Treat `camera_rotation_deg` as uncalibrated in magnitude.
+
+On run1 two airs the false cut had split (727 and 137 degrees) are now one
+air of 940 degrees, which the frames show is one air; its true spin is
+unknown.
+
 `snow features` also crashed printing its summary when a segment had no
 dominant axis (finding 6 produces such segments); fixed in `cli.py`, no
 effect on any number.
@@ -279,6 +300,8 @@ produced no air event, so dashboard columns count 18.
   inversions and the pipeline named 1 of 11 corks it measured
 - that `axis_spin_deg` is a spin count: it undercounts corks even on exact
   poses; `spin_path_deg` is the count
+- that the camera turned by `camera_rotation_deg`: its magnitude assumes a
+  focal a broadcast long lens can exceed tenfold
 
 ## Two corrections worth keeping
 

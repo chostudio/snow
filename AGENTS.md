@@ -111,9 +111,10 @@ Each is load-bearing and each is explained in the linked doc.
 6. **Rotation is never integrated across a camera cut.** The turn that
    happened off-camera was not measured, so it is not counted. Every stage
    that accumulates respects segment boundaries. → `docs/rotation.md`
-7. **Metric scale is uncalibrated.** The focal length is assumed, so angles
-   and ratios hold and absolute metres do not. Never print a length as though
-   it were real. → `docs/validation.md`
+7. **Metric scale is uncalibrated, and so is camera rotation.** The focal
+   length is assumed, so body angles and ratios hold and absolute metres do
+   not; on a long lens `camera_rotation_deg` is over-read several times. Never
+   print a length, or a camera pan, as though it were real. → `docs/validation.md`
 8. **Slow motion corrupts rates, not totals.** Conformed slow motion claims 30
    fps and the timestamps lie; the factor cannot be recovered from the file.
    Anything per-second is wrong by that factor unless `slowmo_factor` is set.
@@ -145,7 +146,7 @@ git diff --cached | grep -niE "nvapi-|api[_-]key|secret|bearer"
 ```bash
 source .venv/bin/activate
 snow doctor                 # tools, packages, vendored client, endpoint, key
-python -m pytest -q         # 71 tests, ~20s, no network and no GPU
+python -m pytest -q         # 72 tests, ~20s, no network and no GPU
 ```
 
 The venv is pinned to **Python 3.12**: the NVIDIA client supports 3.10–3.12
@@ -162,7 +163,7 @@ TypeScript and must stay console-clean.
 ### Testing
 
 Tests are fast, hermetic and run without the NIM. The suite is the real
-specification for five things:
+specification for six things:
 
 - `tests/test_bbox_format.py` — parses our annotation with **NVIDIA's own
   reader**, not a reimplementation of it.
@@ -174,6 +175,8 @@ specification for five things:
 - `tests/test_usd_camera.py` — a rider fixed in the world under a panning
   camera and a cut: the exported root must hold still within each shot and
   never carry one shot's pan into the next.
+- `tests/test_camera_cuts.py` — a whip pan over high-contrast texture is one
+  shot, and a cut to a different scene is two.
 - `tests/test_synth.py` — synthetic tricks really have the inversions their
   names claim, labels are measured from motion, and ground truth in the NIM's
   schema obeys the same forward kinematics as the NIM's own output.
