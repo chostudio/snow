@@ -40,6 +40,15 @@ quaternion  (x, y, z, w)  -> (x, -y, -z, w)
 `tests/test_crop_and_usd.py` pins that these are the *same* rotation expressed
 two ways, which is the part that is easy to get subtly wrong.
 
+### Not yet camera-compensated
+
+The export converts axes only. It does **not** subtract the camera rotation
+`features.py` estimates, so the animation is in the broadcast camera's frame:
+when the camera pans, the rider appears to turn with it. Fine for eyeballing
+pose; wrong as a world-frame reference. Fixing it (apply the inverse camera
+rotation from `<name>.camera.npz` to the root, per segment) is the first step
+of the synthetic-validation plan in [training.md](training.md#synthetic-ground-truth-in-omniverse).
+
 ## Written as text
 
 Output is a text `.usda` on purpose: it needs no `pxr` installed to produce,

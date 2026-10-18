@@ -61,8 +61,12 @@ proven, what is not, and which claims you may not make. Read it before you
 write anything user-facing about accuracy.
 
 Planned, not built: **[docs/training.md](docs/training.md)** — the design for
-the learned half (airborne segmenter, trick classifier). Nothing in it exists
-in the repo yet; do not treat it as describing current behaviour.
+the learned half (airborne segmenter, trick classifier, judging score). Nothing in it exists
+in the repo yet; do not treat it as describing current behaviour. Its
+**Synthetic ground truth in Omniverse** section is the agreed next direction:
+render parametric tricks with Replicator, run them through the unchanged
+pipeline, and use the exact labels to validate spin counts and to train on
+NIM output (never on clean rig skeletons).
 
 ## Artifacts on disk
 
