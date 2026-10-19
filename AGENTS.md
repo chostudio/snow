@@ -123,7 +123,8 @@ Each is load-bearing and each is explained in the linked doc.
    is `spin_path_deg`: it names 20 of 20 synthetic tricks on exact poses,
    but through the pipeline corks failed, because the tracker dropped the
    inverted rider (the NIM reads them fine when boxed). Stitching and rotated
-   recovery in `track.py` fix the boxes; the pipeline is not yet re-measured.
+   recovery in `track.py` fixed the boxes: the pipeline now names 11 of 20
+   (5 of 13 corks, from 1); the rest are split airs and path misreads.
    `axis_spin_deg` undercounts corks by definition; never promote it back.
    → `docs/validation.md`, `docs/rotation.md`, `docs/tracking.md`
 

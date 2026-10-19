@@ -224,9 +224,44 @@ inverted airborne frames 34% -> 98%, sideways 28% -> 93%, upright 76% ->
 coverage went 31% -> 59% automatically and 73% -> 93% with its manual
 merge, every sampled recovered box checked by eye.
 
-**Not yet re-measured through the NIM.** The pipeline rows above are from
-the old boxes; re-running them costs 20 NIM calls. The table this predicts
-is better corks, not a number to quote.
+**Re-measured through the NIM** (all 20 clips, new boxes, new poses; the
+tables further down are still the original run). Pipeline variant, before
+the tracker fix and after:
+
+| | flat (7) | cork (6) | double cork (7) | all (20) |
+|---|---|---|---|---|
+| spin path over the true air names it | 5 -> **7** | 1 -> **3** | 0 -> **1** | 6 -> **11** |
+| dashboard spin right | 5/7 -> **6/7** | 1/4 -> **3/6** | 0/7 -> **2/7** | 6/18 -> **11/20** |
+| dashboard direction right | 7/7 -> 7/7 | 4/4 -> **6/6** | 7/7 -> 6/7 | 18/18 -> 19/20 |
+| spin path over air, mean error | 74 -> 51 | 468 -> **89** | 598 -> **386** | 376 -> **180** |
+| max tilt, mean error | 36 -> 32 | 45 -> **8** | 35 -> 31 | 38 -> **24** |
+| takeoff / landing, frames | 36 / 16 -> 4 / 16 | 101 / 59 -> 26 / 23 | 83 / 55 -> 23 / 43 | 69 / 40 -> **17 / 28** |
+
+Every cork now produces an air event (two produced none). The rider's box
+coverage in these runs matches the figures above (98% inverted). The NIM
+was called once per clip, 120 s apart; one call failed server-side
+(`DEADLINE_EXCEEDED`, no rate limit) and succeeded on retry.
+
+The nine clips still misnamed fail in three ways, none of them a missing
+box:
+
+- **The air is split** (synth09, 18, 20): the detector ends the air
+  partway, so the event holds 83-138 of 248-326 air frames and reads 360,
+  720, 540. Over the true air the path reads -773, -1649, 1046.
+- **The path over-reads** (synth04 900 as 1080, synth08 540 as 720,
+  synth12 720 as 900, synth15 1080 as 1260): pose jitter accumulates in a
+  path, 8-24% here against 5-10% on the first run's flat spins.
+- **The path itself is short** (synth16, 17): over the true air 102 and 430
+  degrees for double cork 1080s whose `axis_spin_deg` reads 981 and 662.
+  synth16 also gets the sense wrong. Not yet diagnosed.
+
+**Camera rotation error rose from 71 to 116 degrees, and that is a counting
+change, not a worse camera.** `camera_rotation_deg` sums the camera's motion
+between consecutive posed frames, so frames without a pose were skipped
+before; now the airborne frames are posed and their camera jitter is
+counted. Run on every frame, the solve itself is steadier with the new
+boxes masked (synth14: path 1024 -> 381 degrees, 95th-percentile step 8.6
+-> 2.7) and still over-reads a true 71 several times, which is finding 5.
 
 `snow features` also crashed printing its summary when a segment had no
 dominant axis (finding 6 produces such segments); fixed in `cli.py`, no
@@ -327,9 +362,9 @@ produced no air event, so dashboard columns count 18.
 - that a rate is real-time unless `slowmo_factor` was actually set
 - that rotation across a camera cut was measured — it was not, by design
 - that a corked trick's spin count is right through the pipeline: the
-  measure names corks correctly on exact poses, but the pipeline named 1 of
-  11 corks it measured, because the tracker dropped most inverted frames.
-  That is fixed in `track.py` and not yet re-measured through the NIM
+  measure names corks correctly on exact poses; through the pipeline, with
+  the tracker fixed, the dashboard named 5 of 13 synthetic corks (it was 1).
+  The rest are split airs and path over- and under-reads, not missing boxes
 - that `axis_spin_deg` is a spin count: it undercounts corks even on exact
   poses; `spin_path_deg` is the count
 - that the camera turned by `camera_rotation_deg`: its magnitude assumes a
