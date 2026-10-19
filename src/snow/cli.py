@@ -137,6 +137,8 @@ def cmd_track(args: argparse.Namespace) -> int:
         cache=cache,
         retrack=args.retrack,
         merge_groups=merge_groups,
+        auto_stitch=not args.no_stitch,
+        recover=not args.no_recover,
         weights=args.weights,
         conf=args.conf,
         imgsz=args.imgsz,
@@ -151,6 +153,10 @@ def cmd_track(args: argparse.Namespace) -> int:
             f"({sel['coverage']:.0%}), frames {span[0]}-{span[1]}, "
             f"median box {sel['median_area_px']}px^2"
         )
+    if report["stitched_ids"]:
+        print(f"  stitched raw track(s) {report['stitched_ids']} into the rider")
+    if report["recovered_boxes"]:
+        print(f"  recovered {report['recovered_boxes']} box(es) by rotated search")
     if report["interpolated_boxes"]:
         print(f"  interpolated {report['interpolated_boxes']} box(es) across short gaps")
     if args.show_candidates:
@@ -543,6 +549,10 @@ def build_parser() -> argparse.ArgumentParser:
                             "the flag for a second body")
         p.add_argument("--retrack", action="store_true",
                        help="re-run detection instead of reusing the cache")
+        p.add_argument("--no-stitch", action="store_true",
+                       help="do not absorb the rider's other track ids within a shot")
+        p.add_argument("--no-recover", action="store_true",
+                       help="do not search the rider's gaps again at 0/90/180/270 deg")
         p.add_argument("--show-candidates", action="store_true",
                        help="list the strongest raw tracks to pick from")
 

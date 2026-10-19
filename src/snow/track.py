@@ -23,6 +23,7 @@ from pathlib import Path
 import cv2
 import numpy as np
 
+from .camera import _colour_histogram
 from .config import MAX_BODIES, WEIGHTS_DIR
 from .ingest import probe
 
@@ -70,6 +71,20 @@ def _clip_box(
     return x0, y0, x1 - x0, y1 - y0
 
 
+def _model(weights: str):
+    from ultralytics import YOLO
+
+    WEIGHTS_DIR.mkdir(parents=True, exist_ok=True)
+    weights_path = WEIGHTS_DIR / weights
+    model = YOLO(str(weights_path) if weights_path.exists() else weights)
+    if not weights_path.exists():
+        # Ultralytics downloads to CWD; keep the repo clean.
+        downloaded = Path(weights)
+        if downloaded.exists():
+            downloaded.replace(weights_path)
+    return model
+
+
 def run_tracker(
     video: Path,
     weights: str = "yolo11s.pt",
@@ -83,17 +98,7 @@ def run_tracker(
 
     Returns (tracks by raw id, frames seen, width, height).
     """
-    from ultralytics import YOLO
-
-    WEIGHTS_DIR.mkdir(parents=True, exist_ok=True)
-    weights_path = WEIGHTS_DIR / weights
-    model = YOLO(str(weights_path) if weights_path.exists() else weights)
-    if not weights_path.exists():
-        # Ultralytics downloads to CWD; keep the repo clean.
-        downloaded = Path(weights)
-        if downloaded.exists():
-            downloaded.replace(weights_path)
-
+    model = _model(weights)
     tracks: dict[int, Track] = {}
     frames = 0
     width = height = 0
@@ -225,6 +230,376 @@ def interpolate_gaps(track: Track, max_gap: int) -> int:
     return filled
 
 
+def view_changes(video: Path, threshold: float = 0.35) -> set[int]:
+    """Frames whose view differs from the previous frame's: likely cuts.
+
+    The colour-histogram half of ``camera.py``'s cut test. Alone it is enough
+    to stop the two steps below from joining boxes across a cut, which is the
+    one mistake they must never make.
+    """
+    cap = cv2.VideoCapture(str(video))
+    cuts: set[int] = set()
+    prev = None
+    frame_id = 0
+    while True:
+        ok, frame = cap.read()
+        if not ok:
+            break
+        hist = _colour_histogram(frame)
+        if prev is not None and cv2.compareHist(
+            prev, hist, cv2.HISTCMP_BHATTACHARYYA
+        ) > threshold:
+            cuts.add(frame_id)
+        prev = hist
+        frame_id += 1
+    cap.release()
+    return cuts
+
+
+def _crosses(cuts: set[int], a: int, b: int) -> bool:
+    """Whether a cut falls in frames ``a+1 .. b``."""
+    return any(a < c <= b for c in cuts)
+
+
+def _continues(
+    box_a: tuple, box_b: tuple, max_jump: float
+) -> bool:
+    """Could ``box_b`` be the same body as ``box_a`` shortly after?
+
+    Uses the diagonal, not width or height: a rider turning upside down swaps
+    the box's aspect but keeps its diagonal.
+    """
+    (xa, ya, wa, ha), (xb, yb, wb, hb) = box_a, box_b
+    da, db = np.hypot(wa, ha), np.hypot(wb, hb)
+    if not 0.5 <= db / da <= 2.0:
+        return False
+    jump = np.hypot((xa + wa / 2) - (xb + wb / 2), (ya + ha / 2) - (yb + hb / 2))
+    return jump <= max_jump * max(da, db)
+
+
+def stitch(
+    tracks: dict[int, Track],
+    rider: Track,
+    cuts: set[int],
+    max_gap: int = 60,
+    max_jump: float = 1.0,
+    max_overlap: float = 0.1,
+) -> list[int]:
+    """Absorb the fragments ByteTrack split the rider into within one shot.
+
+    An inverted rider is detected intermittently, and ByteTrack often issues a
+    new id when detection resumes, so one trick arrives as three or four ids
+    and selection keeps only the largest. A fragment is absorbed only if it
+    (a) barely overlaps the rider's frames in time, so it is not another
+    person on screen at the same moment, (b) starts or ends within
+    ``max_gap`` frames of the rider's track, at a box that continues the
+    rider's, and (c) is not separated from it by a cut. The gap is generous
+    because slow motion stretches a dropout: 40-50 frames between fragments
+    at 4x. The broadcast camera keeps the rider in the same part of the
+    picture, so the box test still discriminates. Joining across cuts
+    stays manual (``--merge``).
+    """
+    absorbed: list[int] = []
+    changed = True
+    while changed:
+        changed = False
+        for raw_id, other in sorted(tracks.items()):
+            if raw_id == rider.raw_id or raw_id in absorbed or not other.boxes:
+                continue
+            frames = set(other.boxes)
+            if len(frames & rider.boxes.keys()) > max_overlap * len(frames):
+                continue
+            start, end = min(frames), max(frames)
+            mine = sorted(set(rider.boxes) - frames)
+            before = [f for f in mine if start - max_gap <= f < start]
+            after = [f for f in mine if end < f <= end + max_gap]
+            linked = (
+                before and not _crosses(cuts, before[-1], start)
+                and _continues(rider.boxes[before[-1]], other.boxes[start], max_jump)
+            ) or (
+                after and not _crosses(cuts, end, after[0])
+                and _continues(other.boxes[end], rider.boxes[after[0]], max_jump)
+            )
+            if linked:
+                for frame_id, box in other.boxes.items():
+                    rider.boxes.setdefault(frame_id, box)
+                absorbed.append(raw_id)
+                changed = True
+    return absorbed
+
+
+# Rotations to try a crop at, and how to map a point in the rotated crop
+# (u, v) back to the crop (x, y), for a crop of size (w, h).
+_ROTATIONS = [
+    (None, lambda u, v, w, h: (u, v)),
+    (cv2.ROTATE_90_CLOCKWISE, lambda u, v, w, h: (v, h - u)),
+    (cv2.ROTATE_180, lambda u, v, w, h: (w - u, h - v)),
+    (cv2.ROTATE_90_COUNTERCLOCKWISE, lambda u, v, w, h: (w - v, u)),
+]
+
+
+def _detect_rotated(model, crop: np.ndarray, conf: float, imgsz: int) -> list[tuple]:
+    """People in ``crop`` at four rotations, as (conf, x, y, w, h) in the crop."""
+    h, w = crop.shape[:2]
+    images = [crop if rot is None else cv2.rotate(crop, rot) for rot, _ in _ROTATIONS]
+    results = model.predict(images, classes=[0], conf=conf, imgsz=imgsz, verbose=False)
+    found = []
+    for (_, back), result in zip(_ROTATIONS, results):
+        if result.boxes is None:
+            continue
+        for (u0, v0, u1, v1), score in zip(
+            result.boxes.xyxy.cpu().numpy(), result.boxes.conf.cpu().numpy()
+        ):
+            corners = np.array([back(u, v, w, h) for u in (u0, u1) for v in (v0, v1)])
+            (x0, y0), (x1, y1) = corners.min(0), corners.max(0)
+            found.append((float(score), x0, y0, x1 - x0, y1 - y0))
+    return found
+
+
+def recover_gaps(
+    video: Path,
+    track: Track,
+    cuts: set[int],
+    model,
+    conf: float = 0.15,
+    imgsz: int = 640,
+    search: float = 3.0,
+    min_side: int = 320,
+    reach: int = 150,
+    patience: int = 30,
+    others: dict[int, Track] | None = None,
+) -> int:
+    """Look again for the rider where the track has a hole, rotated.
+
+    COCO-trained detectors see people upright. On synthetic big air with the
+    true rider box known, YOLO found the rider in 87% of upright airborne
+    frames, 35% of sideways ones and 28% of inverted ones, so the hole is
+    exactly where a cork is. Frames without a box, up to ``reach`` frames
+    from one, are searched in a window around where the rider should be, at
+    0, 90, 180 and 270 degrees; the window is also upscaled to ``imgsz``,
+    which helps a small rider.
+
+    The search walks a chain out from each detection: every box found
+    anchors the next frame, both where it was and carried on at the rider's
+    recent velocity (``_ahead``). The velocity is what follows a halfpipe
+    rider across the picture; on big air the camera holds the rider still
+    and the velocity is mostly the jitter of a tumbling body's box, which
+    alone would steer the anchor off them. A candidate must be where the
+    rider could have got to from either anchor, sized like the rider's own
+    detections (``_reachable``), and not on a raw track that has been
+    somewhere else at the same moment as the rider (``_someone_else``); of
+    those, the nearest wins. A chain gives up
+    ``patience`` frames after its last box, because by then its anchor is a
+    guess and its allowance wide, and resuming is how a chain picks up a
+    bystander; it never crosses a cut.
+
+    That is not enough on a halfpipe: in a fast pan the crowd at the lip
+    sweeps past at the rider's speed, and a chain can step onto a spectator
+    and follow them. So in a hole between two detections, a chain walks in
+    from each side and is kept only if it arrives where the detection on the
+    far side is (``joins``); one that wandered off never does. A chain
+    with nothing to arrive at (the track's ends, or a cut) is kept as is.
+    """
+    if not track.boxes:
+        return 0
+    original = sorted(track.boxes)
+    size = {f: float(np.hypot(*track.boxes[f][2:])) for f in original}
+    frames = _frames_near(video, original, reach)
+    if not frames:
+        return 0
+    others = [o for o in (others or {}).values() if o is not track]
+
+    def rider_size(frame_id: int) -> float | None:
+        """The rider's box diagonal here, from detections in the same shot."""
+        near = [f for f in original if abs(f - frame_id) <= reach
+                and not _crosses(cuts, min(f, frame_id), max(f, frame_id))]
+        if not near:
+            return None
+        near.sort(key=lambda f: abs(f - frame_id))
+        return float(np.median([size[f] for f in near[:15]]))
+
+    def chain(start: int, stop: int, toward: int | None = None) -> dict[int, tuple]:
+        """Walk from detection ``start`` toward ``stop`` (exclusive)."""
+        step = 1 if stop > start else -1
+        boxes = dict(track.boxes)
+        found: dict[int, tuple] = {}
+        last = start
+        for frame_id in range(start + step, stop, step):
+            if frame_id not in frames:
+                continue
+            if abs(frame_id - last) > patience or _crosses(
+                cuts, min(last, frame_id), max(last, frame_id)
+            ):
+                break
+            reference = rider_size(frame_id)
+            if reference is None:
+                break
+            age = abs(frame_id - last)
+            anchors = [_ahead(boxes, last, frame_id, cuts), boxes[last]]
+            if toward is not None:
+                # Lean toward the detection on the far side of the hole.
+                t = age / abs(toward - last)
+                anchors = [tuple(np.array(a) * (1 - t) + np.array(boxes[toward]) * t)
+                           for a in anchors]
+                age = min(age, abs(toward - frame_id))
+            taken = [o.boxes[frame_id] for o in others
+                     if frame_id in o.boxes and _someone_else(o.boxes, boxes)]
+            box = _search(frames[frame_id], anchors, age, reference, model,
+                          conf, imgsz, search, min_side, taken)
+            if box is not None:
+                boxes[frame_id] = found[frame_id] = box
+                last = frame_id
+        return found
+
+    def joins(found: dict[int, tuple], end: int) -> bool:
+        """Does the chain arrive where the detection at ``end`` is?"""
+        if not found:
+            return False
+        last = max(found) if end > max(found) else min(found)
+        anchors = [_ahead({**track.boxes, **found}, last, end, cuts), found[last]]
+        return any(_reachable(a, track.boxes[end], abs(end - last), size[end])
+                   for a in anchors)
+
+    accepted: dict[int, tuple] = {}
+    for prev, nxt in zip(original, original[1:]):
+        if nxt - prev < 2:
+            continue
+        if _crosses(cuts, prev, nxt):
+            accepted.update(chain(prev, nxt))
+            accepted.update(chain(nxt, prev))
+            continue
+        for start, end in ((prev, nxt), (nxt, prev)):
+            found = chain(start, end, toward=end)
+            if joins(found, end):
+                for frame_id, box in found.items():
+                    accepted.setdefault(frame_id, box)
+    accepted.update(chain(original[0], min(frames) - 1))
+    accepted.update(chain(original[-1], max(frames) + 1))
+    track.boxes.update(accepted)
+    return len(accepted)
+
+
+def _ahead(boxes: dict[int, tuple], source: int, frame_id: int, cuts: set[int],
+           window: int = 6) -> tuple:
+    """``source``'s box moved on to ``frame_id`` at the track's recent velocity.
+
+    The velocity is the median per-frame step of the box centre over the
+    boxes up to ``window`` frames behind ``source`` (behind in the direction
+    of travel), within the shot. A rider leaving the top of the frame keeps
+    going up; the spectator below the lip does not.
+    """
+    step = 1 if frame_id > source else -1
+    trail = [f for f in range(source - step * window, source + step, step)
+             if f in boxes and not _crosses(cuts, min(f, source), max(f, source))]
+    x, y, w, h = boxes[source]
+    if len(trail) < 2:
+        return x, y, w, h
+    centres = np.array([[b[0] + b[2] / 2, b[1] + b[3] / 2]
+                        for b in (boxes[f] for f in trail)])
+    gaps = np.abs(np.diff(trail))[:, None]
+    velocity = np.median(np.diff(centres, axis=0) / gaps, axis=0)
+    dx, dy = velocity * abs(frame_id - source)
+    return x + dx, y + dy, w, h
+
+
+def _reachable(anchor: tuple, box: tuple, age: int, reference: float) -> bool:
+    """Could the rider have moved from ``anchor`` to ``box`` in ``age`` frames?
+
+    On the synthetic set the rider's box centre moves 0.03 diagonals a frame
+    (median), 0.16 at the 99th percentile, and a halfpipe rider 0.09-0.14.
+    The allowance grows with the frames since the anchor's box and is
+    capped at 0.3 diagonals, twice the rider's 99th percentile step: past a
+    few frames the anchor is a guess, and a wide allowance is how a chain
+    that resumes after a miss picks up a bystander. Size is
+    judged against ``reference``, the rider's detected size nearby: a tucked
+    rider's box is as small as 0.54 of a standing one.
+    """
+    (xa, ya, wa, ha), (xb, yb, wb, hb) = anchor, box
+    if not 0.5 <= np.hypot(wb, hb) / reference <= 1.6:
+        return False
+    jump = np.hypot((xa + wa / 2) - (xb + wb / 2), (ya + ha / 2) - (yb + hb / 2))
+    return jump <= min(0.1 + 0.1 * age, 0.3) * reference
+
+
+class _Encoded:
+    """A frame held as JPEG, so a few hundred of them fit in memory."""
+
+    def __init__(self, frame: np.ndarray):
+        self.data = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 95])[1]
+
+    def decode(self) -> np.ndarray:
+        return cv2.imdecode(self.data, cv2.IMREAD_COLOR)
+
+
+def _frames_near(video: Path, present: list[int], reach: int) -> dict[int, _Encoded]:
+    """Every frame without a box within ``reach`` frames of one."""
+    have = set(present)
+    marks = np.array(present)
+    cap = cv2.VideoCapture(str(video))
+    frames: dict[int, _Encoded] = {}
+    frame_id = 0
+    while True:
+        ok, frame = cap.read()
+        if not ok:
+            break
+        if frame_id not in have and np.min(np.abs(marks - frame_id)) <= reach:
+            frames[frame_id] = _Encoded(frame)
+        frame_id += 1
+    cap.release()
+    return frames
+
+
+def _someone_else(other: dict[int, tuple], rider: dict[int, tuple], frames: int = 2) -> bool:
+    """Has ``other`` been in a different place from ``rider`` at the same time?
+
+    Then it is another person. An unstitched fragment of the rider passes:
+    wherever both have a box, the boxes coincide.
+    """
+    apart = 0
+    for frame_id in other.keys() & rider.keys():
+        if _iou(other[frame_id], rider[frame_id]) < 0.3:
+            apart += 1
+            if apart >= frames:
+                return True
+    return False
+
+
+def _iou(a: tuple, b: tuple) -> float:
+    ax, ay, aw, ah = a
+    bx, by, bw, bh = b
+    ix = max(0.0, min(ax + aw, bx + bw) - max(ax, bx))
+    iy = max(0.0, min(ay + ah, by + bh) - max(ay, by))
+    inter = ix * iy
+    return inter / (aw * ah + bw * bh - inter)
+
+
+def _search(encoded, anchors, age, reference, model, conf, imgsz, search, min_side,
+            taken):
+    """The person box nearest the anchors that the rider could be, at any rotation."""
+    frame = encoded.decode()
+    height, width = frame.shape[:2]
+    centres = np.array([(x + w / 2, y + h / 2) for x, y, w, h in anchors])
+    cx, cy = centres.mean(0)
+    spread = np.ptp(centres, axis=0).max()
+    side = max(search * max(max(w, h) for _, _, w, h in anchors) + spread, min_side)
+    x0, y0 = int(max(0, cx - side / 2)), int(max(0, cy - side / 2))
+    x1, y1 = int(min(width, cx + side / 2)), int(min(height, cy + side / 2))
+    if x1 - x0 < 16 or y1 - y0 < 16:
+        return None
+    best = None
+    for _, bx, by, bw, bh in _detect_rotated(model, frame[y0:y1, x0:x1], conf, imgsz):
+        box = (bx + x0, by + y0, bw, bh)
+        if not any(_reachable(a, box, age, reference) for a in anchors):
+            continue
+        if any(_iou(box, other) > 0.3 for other in taken):
+            continue
+        distance = np.min(np.hypot(*(centres - (box[0] + bw / 2, box[1] + bh / 2)).T))
+        if best is None or distance < best[0]:
+            best = (distance, box)
+    if best is None:
+        return None
+    return _clip_box(*best[1], width, height)
+
 def write_bbox_file(
     tracks: list[Track], frame_count: int, dest: Path
 ) -> None:
@@ -290,6 +665,8 @@ def build(
     cache: Path | None = None,
     retrack: bool = False,
     merge_groups: list[list[int]] | None = None,
+    auto_stitch: bool = True,
+    recover: bool = True,
     **tracker_kwargs,
 ) -> dict:
     info = probe(video)
@@ -318,11 +695,36 @@ def build(
         selected = merge(tracks, merge_groups)
     else:
         selected = select(tracks, max_bodies, keep)
-    filled = 0
+    # Ids chosen by hand are the user's call; only automatic selection is
+    # stitched.
+    stitching = auto_stitch and not (merge_groups or keep)
+    cuts = view_changes(video) if (recover or stitching) else set()
+    absorbed: list[int] = []
+
+    def stitch_into(track: Track) -> list[int]:
+        if not stitching:
+            return []
+        # Never hand one body's fragment, or another body, to a second.
+        taken = {t.raw_id for t in selected if t is not track} | set(absorbed)
+        more = stitch({i: t for i, t in tracks.items() if i not in taken}, track, cuts)
+        absorbed.extend(more)
+        return more
+
+    recovered = 0
+    model = _model(tracker_kwargs.get("weights", "yolo11s.pt")) if recover else None
     for track in selected:
+        stitch_into(track)
+        if recover:
+            recovered += recover_gaps(video, track, cuts, model, others=tracks)
+            # Recovery can bring the track within reach of a fragment that
+            # was too far away before.
+            if stitch_into(track):
+                recovered += recover_gaps(video, track, cuts, model, others=tracks)
         # Drop anything past the clamp before interpolating across it.
         for frame_id in [f for f in track.boxes if f >= frame_count]:
             del track.boxes[frame_id]
+    filled = 0
+    for track in selected:
         filled += interpolate_gaps(track, max_gap)
 
     selected = [t for t in selected if t.boxes]
@@ -350,6 +752,9 @@ def build(
             for i, t in enumerate(selected, start=1)
         ],
         "interpolated_boxes": filled,
+        "stitched_ids": absorbed,
+        "recovered_boxes": recovered,
+        "cuts": sorted(cuts),
         "top_candidates": [
             {
                 "raw_id": t.raw_id,

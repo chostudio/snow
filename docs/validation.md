@@ -124,7 +124,8 @@ below has a mechanism that does not depend on rendering style.
    rotation is the `axis_spin_deg` series, which is projected onto its own
    net axis and so only ever grows. The sign of vertical yaw is right on
    20 of 20, in both variants.
-4. **The NIM misses inversions.** Of 13 corked tricks, the pipeline's max
+4. **Inversions are missed through the pipeline** (first put down to the
+   NIM; it was the tracker, see below). Of 13 corked tricks, the pipeline's max
    tilt passed 90 degrees on 7 (the oracle: 13 of 13), and it reported an
    inversion on 2 of 7 flat spins. Where the inversion is missed, the spin
    collapses: five of those six read under 230 degrees. Pipeline `axis_spin_deg` as a
@@ -183,8 +184,8 @@ homography and to change the frame's colour content (see
 [rotation.md](rotation.md#what-counts-as-a-cut)). All 20 synthetic clips are
 one shot again; run1 went from 17 segments to 4, at three cuts checked by eye.
 Re-scored through the pipeline: max-tilt error 46 -> 38 degrees, direction
-right 18 of 18, spin named still 6 of 18 (the NIM's missed inversions are
-the limit). Camera-rotation error rose from 56 to 71 degrees: the false cuts
+right 18 of 18, spin named still 6 of 18 (missed inversions are the limit;
+next section). Camera-rotation error rose from 56 to 71 degrees: the false cuts
 had been resetting the camera and hiding finding 5's over-read.
 
 Finding 5 is **not** fixed, deliberately. The focal cannot be recovered
@@ -196,6 +197,36 @@ Treat `camera_rotation_deg` as uncalibrated in magnitude.
 On run1 two airs the false cut had split (727 and 137 degrees) are now one
 air of 940 degrees, which the frames show is one air; its true spin is
 unknown.
+
+### Fixed after this table: the tracker, not the NIM, lost the inversions
+
+Finding 4 said the NIM misses inversions. Comparing every NIM pose with the
+exact skeleton in the camera frame, over the air of the 13 corked clips:
+
+| true tilt | frames with a NIM pose | body-up error, median | NIM says inverted |
+|---|---|---|---|
+| 0-60 | 1,329 | 5 degrees | 0% |
+| 60-90 | 147 | 9 | 10% |
+| 90-120 | 67 | 9 | 96% |
+| 120-180 | 123 | 12 | 100% |
+
+Given a box, the NIM reads an inverted rider correctly. It was not given
+one: the NIM returned a pose for every boxed frame, and on the failing
+clips 18-48% of the air was boxed. YOLO, trained on upright people, found
+the rider in 34% of inverted and 28% of sideways airborne frames, and
+ByteTrack split each cork into three or four ids of which one was kept.
+On synth14 all 70 inverted frames had no box.
+
+`track.py` now stitches the rider's fragments within a shot and searches
+the holes again at four rotations ([tracking.md](tracking.md)): coverage of
+inverted airborne frames 34% -> 98%, sideways 28% -> 93%, upright 76% ->
+98%, with 0.2-0.7% of boxes on the wrong thing. On run1 (real halfpipe)
+coverage went 31% -> 59% automatically and 73% -> 93% with its manual
+merge, every sampled recovered box checked by eye.
+
+**Not yet re-measured through the NIM.** The pipeline rows above are from
+the old boxes; re-running them costs 20 NIM calls. The table this predicts
+is better corks, not a number to quote.
 
 `snow features` also crashed printing its summary when a segment had no
 dominant axis (finding 6 produces such segments); fixed in `cli.py`, no
@@ -296,8 +327,9 @@ produced no air event, so dashboard columns count 18.
 - that a rate is real-time unless `slowmo_factor` was actually set
 - that rotation across a camera cut was measured — it was not, by design
 - that a corked trick's spin count is right through the pipeline: the
-  measure names corks correctly on exact poses, but the NIM misses half the
-  inversions and the pipeline named 1 of 11 corks it measured
+  measure names corks correctly on exact poses, but the pipeline named 1 of
+  11 corks it measured, because the tracker dropped most inverted frames.
+  That is fixed in `track.py` and not yet re-measured through the NIM
 - that `axis_spin_deg` is a spin count: it undercounts corks even on exact
   poses; `spin_path_deg` is the count
 - that the camera turned by `camera_rotation_deg`: its magnitude assumes a

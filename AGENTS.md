@@ -43,7 +43,7 @@ alone. That is the main reason the pipeline is debuggable, so preserve it.
 |---|---|---|
 | `src/snow/scout.py` | split a broadcast into shots, rank them for pose work | [docs/footage.md](docs/footage.md) |
 | `src/snow/ingest.py` | download, cut, re-encode, verify the NIM's input rules | [docs/footage.md](docs/footage.md) |
-| `src/snow/track.py` | detect/track the rider, write the bbox annotation | [docs/tracking.md](docs/tracking.md) |
+| `src/snow/track.py` | detect/track the rider, stitch its fragments, re-find it upside down, write the bbox annotation | [docs/tracking.md](docs/tracking.md) |
 | `src/snow/crop.py` | reframe onto the rider, with correct intrinsics | [docs/tracking.md](docs/tracking.md) |
 | `src/snow/pose.py` | drive the NIM, summarise its output | [docs/nim.md](docs/nim.md) |
 | `src/snow/_nim_launcher.py` | keep the API key out of the process list | [docs/nim.md](docs/nim.md) |
@@ -121,9 +121,11 @@ Each is load-bearing and each is explained in the linked doc.
    → `docs/footage.md`
 9. **Absolute spin counts are unvalidated on real footage.** The headline
    is `spin_path_deg`: it names 20 of 20 synthetic tricks on exact poses,
-   but through the NIM corks still fail, because the NIM misses half the
-   inversions. `axis_spin_deg` undercounts corks by definition; never
-   promote it back. → `docs/validation.md`, `docs/rotation.md`
+   but through the pipeline corks failed, because the tracker dropped the
+   inverted rider (the NIM reads them fine when boxed). Stitching and rotated
+   recovery in `track.py` fix the boxes; the pipeline is not yet re-measured.
+   `axis_spin_deg` undercounts corks by definition; never promote it back.
+   → `docs/validation.md`, `docs/rotation.md`, `docs/tracking.md`
 
 ## Secrets
 
@@ -146,7 +148,7 @@ git diff --cached | grep -niE "nvapi-|api[_-]key|secret|bearer"
 ```bash
 source .venv/bin/activate
 snow doctor                 # tools, packages, vendored client, endpoint, key
-python -m pytest -q         # 72 tests, ~20s, no network and no GPU
+python -m pytest -q         # 77 tests, ~20s, no network and no GPU
 ```
 
 The venv is pinned to **Python 3.12**: the NVIDIA client supports 3.10–3.12
@@ -177,6 +179,9 @@ specification for six things:
   never carry one shot's pan into the next.
 - `tests/test_camera_cuts.py` — a whip pan over high-contrast texture is one
   shot, and a cut to a different scene is two.
+- `tests/test_track_recovery.py` — rotated boxes map back exactly; stitching
+  joins the rider's fragments but not a bystander or across a cut; a
+  recovery chain that wanders onto a spectator is dropped whole.
 - `tests/test_synth.py` — synthetic tricks really have the inversions their
   names claim, labels are measured from motion, and ground truth in the NIM's
   schema obeys the same forward kinematics as the NIM's own output.
