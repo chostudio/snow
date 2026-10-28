@@ -6,9 +6,10 @@ measured. Read [validation.md](validation.md) before quoting any number here.
 
 > **Status: built and measured on synthetic clips only.** Its accuracy on
 > real broadcast footage is **unmeasured**: there is no hand-labelled real
-> set yet (see [labelling real airs](#labelling-real-airs)). On the two real
-> clips available it over-calls air badly (below), so it is **opt-in** and
-> must stay off for real footage until the gold set says otherwise.
+> set yet (see [labelling real airs](#labelling-real-airs)). On the real
+> clips available it over-calls air badly, including a rider standing still
+> (below), so it is **opt-in** and must stay off for real footage until the
+> gold set says otherwise.
 
 ## What it replaces
 
@@ -25,7 +26,7 @@ second.
 uv pip install -e '.[learn]'                       # torch
 snow segmenter build                               # labelled clips -> data/models/segmenter/dataset.npz
 snow segmenter evaluate                            # held-out scores vs both heuristics
-snow segmenter train --out data/weights/segmenter.pt   # or fetch segmenter_scale154.pt from S3
+snow segmenter train --out data/weights/segmenter.pt   # or fetch segmenter_ground240.pt from S3
 snow features run1 --segmenter data/weights/segmenter.pt
 web/tools/export_session.py run1                   # takes the segmenter's airs (--air rate to refuse)
 ```
@@ -183,32 +184,105 @@ dashboard detector is more conservative (it misses the slow ends of airs,
 recall 0.75 to 0.81) and splits more airs; the segmenter's mean errors are
 pulled up by a few airs where it misses a hidden takeoff or fragments.
 
-The shipped weights (`segmenter_scale154.pt`, all 154 clips) are in
-`s3://snow-artifacts-009160029345/models/segmenter/weights/`, with the
-dataset bundle and every evaluation run beside them.
+The 154-clip weights are `segmenter_scale154.pt`, superseded by the 240-clip
+weights below.
 
+### 240 clips: long ground added
 
-### Real footage: unmeasured, and a warning
+The scaled run then added clips with a **long ground model** (`terrain` in
+`trick.json`): standing still at the top, riding the flat deck, S-turns, the
+kicker transition, and a long ride-out carving to a stop, about 29%
+airborne against 61% for the big-air-only clips. Data at the time of
+training (the manifest was still growing; it had 228 lines when this was
+written, fewer than 50 more, so no second retrain): 240 clips, 75 groups,
+110,265 frames, 46% airborne; 166 big-air-only clips (57 groups) and 74
+long-ground clips (19 groups). Tables are split by kind of clip, because a
+mix can hide a weak one.
+
+**One held-out set never used for tuning:** 56 clips (14 groups) drawn from
+the scaled run's groups, trained on the other 184. The draw put only 6
+long-ground clips in it, so the long-ground row here is thin; the
+cross-validation below scores all 74.
+
+| clips | method | frame F1 (95% CI) | precision | recall | airs found | split | false airs | takeoff error, median (mean) frames | landing error, median (mean) frames |
+|---|---|---|---|---|---|---|---|---|---|
+| all 56 | segmenter | 0.953 (0.930 to 0.974) | 0.974 | 0.933 | 56/56 | 2 | 4 | 2.0 (11.2) | 1.0 (7.1) |
+| | `airborne_hint` (old) | 0.715 (0.682 to 0.747) | 0.848 | 0.619 | 56/56 | 49 | 84 | 50.5 (66.0) | 39.5 (56.7) |
+| | dashboard detector | 0.895 (0.859 to 0.928) | 0.973 | 0.829 | 56/56 | 9 | 1 | 4.5 (20.3) | 11.0 (31.2) |
+| | every seen frame (floor) | 0.770 (0.743 to 0.793) | 0.643 | 0.960 | 56/56 | 0 | 0 | 32.0 (47.6) | 56.0 (73.2) |
+| big air, 50 | segmenter | 0.954 (0.926 to 0.976) | 0.978 | 0.930 | 50/50 | 2 | 1 | 2.0 (11.5) | 1.0 (7.6) |
+| | `airborne_hint` (old) | 0.702 (0.666 to 0.733) | 0.860 | 0.592 | 50/50 | 44 | 67 | 54.5 (70.3) | 40.5 (59.9) |
+| | dashboard detector | 0.891 (0.846 to 0.926) | 0.972 | 0.823 | 50/50 | 9 | 1 | 4.5 (21.3) | 11.5 (33.0) |
+| long ground, 6 | segmenter | 0.948 (0.905 to 0.978) | 0.942 | 0.955 | 6/6 | 0 | 3 | 3.0 (8.7) | 1.5 (3.3) |
+| | `airborne_hint` (old) | 0.812 (0.718 to 0.877) | 0.780 | 0.846 | 6/6 | 5 | 17 | 27.0 (30.0) | 17.0 (30.7) |
+| | dashboard detector | 0.928 (0.863 to 0.976) | 0.982 | 0.879 | 6/6 | 0 | 0 | 8.0 (11.3) | 7.0 (17.0) |
+
+**Every clip once: 5-fold cross-validation by group**, all 240:
+
+| clips | method | frame F1 (95% CI) | precision | recall | airs found | split | false airs | takeoff error, median (mean) frames | landing error, median (mean) frames |
+|---|---|---|---|---|---|---|---|---|---|
+| all 240 | segmenter | 0.946 (0.932 to 0.957) | 0.960 | 0.932 | 238/240 | 17 | 25 | 2.0 (10.2) | 1.0 (8.4) |
+| | `airborne_hint` (old) | 0.684 (0.664 to 0.703) | 0.742 | 0.634 | 238/240 | 211 | 614 | 45.0 (66.4) | 34.0 (51.4) |
+| | dashboard detector | 0.873 (0.849 to 0.893) | 0.958 | 0.802 | 235/240 | 44 | 29 | 6.0 (25.5) | 8.0 (27.2) |
+| | every seen frame (floor) | 0.702 (0.678 to 0.725) | 0.552 | 0.965 | 238/240 | 0 | 2 | 30.5 (71.4) | 69.5 (100.1) |
+| big air, 166 | segmenter | 0.967 (0.958 to 0.974) | 0.986 | 0.948 | 166/166 | 8 | 3 | 2.0 (8.5) | 1.0 (6.3) |
+| | `airborne_hint` (old) | 0.702 (0.682 to 0.721) | 0.863 | 0.591 | 166/166 | 147 | 214 | 53.5 (74.0) | 40.5 (55.6) |
+| | dashboard detector | 0.886 (0.863 to 0.907) | 0.980 | 0.808 | 165/166 | 29 | 5 | 5.0 (27.4) | 9.0 (28.4) |
+| long ground, 74 | segmenter | 0.900 (0.864 to 0.929) | 0.903 | 0.896 | 72/74 | 9 | 22 | 3.0 (14.0) | 1.0 (13.1) |
+| | `airborne_hint` (old) | 0.653 (0.613 to 0.695) | 0.590 | 0.732 | 72/74 | 64 | 400 | 28.0 (48.8) | 24.5 (41.9) |
+| | dashboard detector | 0.845 (0.798 to 0.888) | 0.909 | 0.788 | 70/74 | 15 | 24 | 6.0 (21.0) | 5.0 (24.2) |
+| | every seen frame (floor) | 0.534 (0.506 to 0.563) | 0.373 | 0.942 | 72/74 | 0 | 2 | 107.5 (146.0) | 176.0 (195.3) |
+
+Median boundary error in real time (cross-validation): segmenter 33 ms at
+takeoff and 19 ms at landing, dashboard detector 100 ms and 111 ms. On
+long-ground clips alone: 44 and 17 ms against 100 and 83 ms. Both
+boundaries within 3 frames: 118 of 240 airs against 36.
+
+Long ground is harder for every method, and that is the point of it: the
+floor drops from 0.81 to 0.53, so frame F1 now rewards finding the air
+rather than calling everything air. The segmenter still leads, but on long
+ground its false airs (22 on 74 clips, about one clip in three) are as many
+as the dashboard detector's: 15 of the 22 fall on the ride-out after
+landing and 7 on the approach, median 0.5 s of real time. Leaving the tilt channel out as well (`--ignore confidence pose
+cos_tilt`) scored 0.951 overall and 0.912 on long ground: within the
+intervals, so the default is unchanged.
+
+The shipped weights are **`segmenter_ground240.pt`**, trained on all 240,
+in `s3://snow-artifacts-009160029345/models/segmenter/weights/`, with the
+dataset bundle (`dataset_ground.npz`) and every evaluation run in `runs/`.
+They load with `Segmenter.load` and `snow features --segmenter PATH`, the
+same interface as before.
+
+### Real footage: unmeasured, and still a warning
 
 No real clip has labels, so there is no real accuracy number. As a sanity
-check only, the shipped 154-clip model was run on the two real clips with
-poses:
+check only, the 240-clip model on the three real clips, against the
+dashboard's rate detector (frame ranges `[first, end)`):
 
-- `run1` (halfpipe, 720 frames, 4 shots): the segmenter marks about 500 of
-  the 644 frames with a body airborne, including the rider standing at the
-  top before dropping in; the dashboard detector finds 2 airs.
-- `trick` (one slow-motion trick, 312 frames): the segmenter marks frames 6
-  to 303 airborne; the dashboard detector 40 to 260.
+| clip | segmenter airs | dashboard airs |
+|---|---|---|
+| `run1` (halfpipe, 720 frames, 4 shots, 644 with a body) | 0-31, 31-66, 111-381, 501-588, 588-606, 692-720 (469 frames) | 357-381, 492-580 |
+| `trick` (one trick, 312 frames, 303 with a body) | 0-303 | 40-260 |
+| `vito` (240 frames, 5 shots, 84 with a body) | none | none |
 
-Seven times more synthetic data did not change this.
+`run1` opens with the rider standing at the top (shot 0, frames 0-30, and
+the start of shot 1): **the segmenter still calls that standing start
+airborne**, so the long-ground clips did not fix it (the 154-clip model
+called 499 frames of `run1` airborne; this one 469). `vito`'s poses were made
+for this check by the self-hosted NIM and are in
+`data/models/segmenter/real/`; only 84 of its 240 frames have a tracked
+rider, and neither detector finds an air there.
 
-That is a domain gap, not a tuning problem. The synthetic clips are big air
-only, with 0.8 s of straight in-run and 0.8 s of ride-out: the model has never
-seen standing, walking, carving a halfpipe wall, crowds or a far camera. The
-jitter augmentation reduced the damage for the 20-clip model (on `run1`,
-from about 640 to 490 frames); it did not fix it. **Do not enable it
-on real footage** until a gold set shows otherwise; the next synthetic batch
-should include long riding, standing and non-trick stretches.
+Why, measured on `run1` frames 0-66 by replacing one input at a time with
+its median on synthetic standing frames: the mean probability goes from 0.88
+to 0.59 with `rot_step`, to 0.53 with `grab`, and barely moves with tilt or
+the ray rates. Real NIM output for a standing rider turns 0.2 (2 degrees)
+per frame, against 0.03 for a rendered one, and reads the hands closer to
+the feet (1.31 torso lengths against 1.58). The renders are still far
+cleaner than broadcast pose, and the jitter augmentation does not close
+that. **Do not enable it on real footage** until the gold set says
+otherwise; the most useful next data is real labelled ground, or renders
+whose pose noise matches broadcast.
 
 ## Labelling real airs
 

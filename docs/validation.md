@@ -418,9 +418,11 @@ produced no air event, so dashboard columns count 18.
 ## The airborne segmenter
 
 **Real footage: not proven.** Measured on synthetic renders only
-([segmenter.md](segmenter.md)). On the two real clips it calls most
-frames airborne, including a rider standing at the top of a halfpipe, so its
-real accuracy is not just unmeasured but suspect. No real clip has
+([segmenter.md](segmenter.md)). On real clips it calls most of a halfpipe
+run airborne, including the rider standing at the top, and it still did
+after training on synthetic clips with standing starts and long riding: the
+renders' pose is far steadier than broadcast pose. Its real accuracy is not
+just unmeasured but suspect. No real clip has
 hand-labelled takeoff and landing frames yet.
 
 ## Claims you may not make
