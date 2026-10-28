@@ -159,14 +159,34 @@ def pipeline_all(selected: list[Path], spacing_s: float | None = None) -> None:
             print(f"{clip.name}: pipeline failed ({exc}); continuing", file=sys.stderr)
 
 
+def _plain(value):
+    """numpy scalars as Python ones, so a cached ``False`` reads back false."""
+    return value.item() if hasattr(value, "item") else str(value)
+
+
 def results(selected: list[Path]) -> list[dict]:
+    """Both variants' rows for every clip; also written to ``results.json``.
+
+    Each clip's rows are cached in its ``compare.json``. A clip whose pose
+    files have since been pruned to save disk (a batch keeps the NIM's poses
+    but drops the ground-truth JSON) is read back from that cache, so the
+    table always covers the whole set.
+    """
     rows = []
     for clip in selected:
         if not (clip / "labels.json").exists():
             continue
-        rows.append(compare.row(clip, "oracle", f"{clip.name}-oracle"))
-        rows.append(compare.row(clip, "pipeline", clip.name))
-    (SYNTH_DIR / "results.json").write_text(json.dumps(rows, indent=2, default=str))
+        cache = clip / "compare.json"
+        oracle = f"{clip.name}-oracle"
+        if cfg.pose_path(oracle).exists() and cfg.pose_path(clip.name).exists():
+            pair = [compare.row(clip, "oracle", oracle), compare.row(clip, "pipeline", clip.name)]
+            cache.write_text(json.dumps(pair, indent=2, default=_plain))
+        elif cache.exists():
+            pair = json.loads(cache.read_text())
+        else:
+            pair = [compare.row(clip, "oracle", oracle), compare.row(clip, "pipeline", clip.name)]
+        rows.extend(pair)
+    (SYNTH_DIR / "results.json").write_text(json.dumps(rows, indent=2, default=_plain))
     return rows
 
 

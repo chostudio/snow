@@ -13,7 +13,9 @@
 # Environment: SNOW_BLENDER (the Blender binary), SNOW_NIM_PREVIEW=0 and
 # SNOW_NIM_TARGET for a self-hosted NIM, SNOW_SYNTH_SAMPLES (default 16),
 # SNOW_SYNTH_S3 (optional s3:// prefix: each finished clip is copied there
-# in data/'s layout, without its frames).
+# in data/'s layout, without its frames), SNOW_SYNTH_PRUNE=1 (after the copy,
+# delete the scene, the ground-truth JSON and the ingested mp4 from the box;
+# the clip's scores are cached in compare.json first).
 set -uo pipefail
 cd "$(dirname "$0")/.."
 STAGE=${1:?render or pipeline}
@@ -66,9 +68,16 @@ while [ ! -e "$SYNTH/STOP" ]; do
       log "pipeline $name"
       if "${SNOW[@]}" synth pipeline --only "$name" > "$dir/pipeline.log" 2>&1 \
          && [ -s "data/poses/$name.features.json" ]; then
+        # Score it now (cached in compare.json), so the heavy files can go.
+        "${SNOW[@]}" synth compare --only "$name" > "$dir/compare.log" 2>&1
         if sync_clip "$name"; then
           echo $(( $(date +%s) - t0 )) > "$dir/DONE"
           log "done $name in $(cat "$dir/DONE")s"
+          if [ -n "${SNOW_SYNTH_PRUNE:-}" ] && [ -s "$dir/compare.json" ]; then
+            # On S3 already; the box's disk is small and shared.
+            rm -rf "$dir/scene.blend" "$dir/scene.usdc" "$dir/textures" \
+              "$dir/gt.poses.json" "data/poses/$name-oracle.json" "data/clips/$name.mp4"
+          fi
         else
           log "s3 sync failed for $name; will retry"
         fi
