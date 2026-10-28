@@ -92,7 +92,10 @@ def encode(clip: Path, renderer: str = "blender", engine: str = "eevee") -> Path
          "-c:v", "libx264", "-pix_fmt", "yuv420p", "-crf", "18", str(dest)],
         check=True,
     )
-    label = renderer if renderer != "blender" or engine == "eevee" else f"blender-{engine}"
+    if renderer == "replicator":
+        label = "isaac-replicator"
+    else:
+        label = "blender" if engine == "eevee" else f"blender-{engine}"
     (clip / "renderer.txt").write_text(label + "\n")
     return dest
 

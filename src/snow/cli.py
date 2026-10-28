@@ -508,6 +508,21 @@ def cmd_synth(args: argparse.Namespace) -> int:
                 print(f"\n{variant}, by {by.replace('true_', '')}")
                 print(compare.table([r for r in rows if r["variant"] == variant], by))
         print("\n" + compare.per_clip(rows))
+    if args.step == "fidelity":
+        from .synth import fidelity
+
+        print("| clip | renderer | frames | detected | confidence | 2D error / box "
+              "| PA-MPJPE (mm) |")
+        print("|---|---|---|---|---|---|---|")
+        for clip in selected:
+            if not (clip / "gt_raw.npz").exists():
+                continue
+            s = fidelity.clip_score(clip, cfg.pose_path(clip.name))
+            renderer = clip / "renderer.txt"
+            label = renderer.read_text().strip() if renderer.exists() else "?"
+            print(f"| {clip.name} | {label} | {s['frames']} | {s['detected']:.2f} "
+                  f"| {s.get('confidence', '–')} | {s.get('kp2d_rel', '–')} "
+                  f"| {s.get('pa_mpjpe_mm', '–')} |")
     return 0
 
 
@@ -762,7 +777,7 @@ def build_parser() -> argparse.ArgumentParser:
         "synth", help="synthetic tricks with exact labels: plan, render, compare"
     )
     p_synth.add_argument("step", choices=["plan", "render", "encode", "prepare",
-                                          "pipeline", "compare", "all"])
+                                          "pipeline", "compare", "fidelity", "all"])
     p_synth.add_argument("--renderer", choices=["blender", "replicator"], default="blender",
                          help="whose frames `encode` uses")
     p_synth.add_argument("--only", nargs="+", help="clip name prefixes, e.g. synth14")
