@@ -59,6 +59,11 @@ def cmd_evaluate(args: argparse.Namespace) -> int:
     print(f"\n{result['protocol']}: {result['clips']} clips, {result['groups']} groups, "
           f"{result['arch']} with {result['params']:,} parameters\n")
     print(T.report_table(result))
+    for variant, summary in result.get("by_variant", {}).items():
+        if len(result.get("by_variant", {})) > 1:
+            clips = next(iter(summary.values()))["clips"]
+            print(f"\n{variant or 'unlabelled'} clips only ({clips}):\n")
+            print(T.report_table(result, summary))
     print(f"\nwrote {args.out}")
     return 0
 

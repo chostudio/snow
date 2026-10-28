@@ -319,3 +319,15 @@ def test_jitter_keeps_steps_unsigned_and_hidden_frames_empty():
     assert np.all(x[:10] == 0)
     assert np.all(x[:, I.CHANNELS.index("rot_step")] >= 0)
     assert x[10:, I.CHANNELS.index("elev_step")].std() > 0
+
+
+def test_long_ground_clips_are_told_apart(tmp_path):
+    """Scores are split by kind of clip, read from the trick's own terrain flag."""
+    for name, terrain in (("a", True), ("b", False)):
+        clip = tmp_path / name
+        clip.mkdir()
+        (clip / "labels.json").write_text(json.dumps(
+            {"name": name, "takeoff_frame": 10, "landing_frame": 20}))
+        (clip / "trick.json").write_text(json.dumps({"terrain": terrain}))
+    sources = {s.name: s for s in D.discover(tmp_path)}
+    assert sources["a"].variant == "long-ground" and sources["b"].variant == "big-air"
