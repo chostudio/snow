@@ -135,6 +135,8 @@ def fit(train: list[dict], arch: str = "tcn", epochs: int = 60, batch: int = 64,
     loss_fn = nn.BCEWithLogitsLoss(reduction="none", pos_weight=pos_weight)
     opt = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=1e-2)
     sched = torch.optim.lr_scheduler.OneCycleLR(opt, max_lr=lr, total_steps=epochs, pct_start=0.15)
+    # Ignored channels stay exactly zero, as they are at inference.
+    live = torch.tensor(std < 1e8, dtype=torch.float32, device=device)
     for epoch in range(epochs):
         model.train()
         x, y, m = sample_windows(train, mean, std, rng, window=window)
@@ -143,7 +145,7 @@ def fit(train: list[dict], arch: str = "tcn", epochs: int = 60, batch: int = 64,
         for k in range(0, len(order), batch):
             idx = order[k:k + batch]
             xb = torch.from_numpy(x[idx]).to(device)
-            xb = xb + NOISE * torch.randn_like(xb)
+            xb = xb + NOISE * torch.randn_like(xb) * live
             yb = torch.from_numpy(y[idx]).to(device)
             mb = torch.from_numpy(m[idx]).to(device)
             loss = (loss_fn(model(xb), yb) * mb).sum() / mb.sum().clamp(min=1)
