@@ -186,3 +186,24 @@ def test_prediction_is_mirror_equivariant():
     assert got["sense"]["p"] == pytest.approx(flipped["sense"]["p"], abs=1e-5)
     assert got["rotation"] == flipped["rotation"]
     assert got["direction"] == flipped["direction"]
+
+
+def test_dataset_round_trips_without_pickles(tmp_path):
+    air = ds.Air(name="a", group="g", split="test", track=_spin(360, 30), gt=(10, 40),
+                 heuristic=None, labels={"rotation": 2, "sense": 1, "stance": 0,
+                                         "axis": 0, "grab": 0},
+                 baseline={"gt": {"spin_deg": 360}})
+    path = ds.save([air], tmp_path / "d.npz")
+    back = ds.load(path)[0]
+    assert (back.name, back.group, back.split, back.gt, back.heuristic) == \
+        ("a", "g", "test", (10, 40), None)
+    assert np.array_equal(back.track.k3, air.track.k3)
+    assert back.labels == air.labels and back.baseline == air.baseline
+
+
+def test_nearest_rotation_reads_a_regressed_spin():
+    from snow.learn import evaluate as ev
+
+    assert ds.ROTATIONS[ev.nearest_rotation(1010.0)] == 1080
+    assert ds.ROTATIONS[ev.nearest_rotation(-700.0)] == 720
+    assert ds.ROTATIONS[ev.nearest_rotation(99999.0)] == ds.ROTATIONS[-1]
