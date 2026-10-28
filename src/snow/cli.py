@@ -475,7 +475,8 @@ def cmd_synth(args: argparse.Namespace) -> int:
 
     cfg.ensure_dirs()
     if args.step == "plan":
-        for clip in steps.plan(args.seed):
+        for clip in steps.plan(args.seed, scale=args.scale, start=args.start,
+                               long_ground=args.long_ground):
             labels = json.loads((clip / "labels.json").read_text())
             print(f"{clip.name:28s} {labels['inversions']} inversion(s), "
                   f"axis spin {labels['axis_spin_deg']:.0f}deg, "
@@ -488,11 +489,11 @@ def cmd_synth(args: argparse.Namespace) -> int:
     if args.step in ("render", "all"):
         for clip in selected:
             print(f"rendering {clip.name}")
-            steps.render(clip, args.width, args.height, args.samples)
-            steps.encode(clip)
+            steps.render(clip, args.width, args.height, args.samples, args.engine)
+            steps.encode(clip, engine=args.engine)
     if args.step == "encode":
         for clip in selected:
-            steps.encode(clip, args.renderer)
+            steps.encode(clip, args.renderer, args.engine)
             print(f"encoded {clip.name} from {args.renderer} frames")
     if args.step in ("prepare", "all"):
         for clip in selected:
@@ -768,9 +769,18 @@ def build_parser() -> argparse.ArgumentParser:
     p_synth.add_argument("--seed", type=int, default=0)
     p_synth.add_argument("--width", type=int, default=1280)
     p_synth.add_argument("--height", type=int, default=720)
-    p_synth.add_argument("--samples", type=int, default=16, help="EEVEE samples")
-    p_synth.add_argument("--spacing", type=float, default=120.0,
-                         help="minimum seconds between NIM calls")
+    p_synth.add_argument("--samples", type=int, default=16, help="render samples")
+    p_synth.add_argument("--engine", choices=["eevee", "cycles"], default="eevee",
+                         help="Blender engine; cycles for headless GPU boxes")
+    p_synth.add_argument("--scale", type=int, default=0,
+                         help="plan N clips of the balanced training set instead of the 20")
+    p_synth.add_argument("--start", type=int, default=1,
+                         help="first clip number for --scale")
+    p_synth.add_argument("--long-ground", action="store_true",
+                         help="--scale clips with long approaches and ride-outs on the snow")
+    p_synth.add_argument("--spacing", type=float, default=None,
+                         help="minimum seconds between NIM calls "
+                              "(default 120 hosted, 0 self-hosted)")
     p_synth.set_defaults(func=cmd_synth)
 
     p_coach = sub.add_parser(

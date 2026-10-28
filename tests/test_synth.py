@@ -201,3 +201,92 @@ def test_true_camera_track_uses_camera_py_conventions():
     for i in range(1, 5):
         # camera.estimate accumulates exactly so: current = delta @ current.
         assert np.allclose(track.rotations[i], track.deltas[i] @ track.rotations[i - 1])
+
+
+def test_scale_plan_is_balanced_grouped_and_real():
+    planned = tricks.scale_plan(12, seed=5, group_size=4)
+    kinds = [t.kind for t in planned]
+    assert {k: kinds.count(k) for k in tricks.KINDS} == {k: 4 for k in tricks.KINDS}
+    assert sorted(t.camera_angle for t in planned) == sorted(tricks.CAMERA_ANGLES * 3)
+    assert [t.direction for t in planned].count("frontside") == 6
+    # A split group is one rider at one venue, and nothing is shared across groups.
+    groups = {}
+    for t in planned:
+        groups.setdefault(t.group, set()).add((t.rider_seed, t.venue_seed, t.body["height"]))
+    assert len(groups) == 3 and all(len(v) == 1 for v in groups.values())
+    assert len({next(iter(v)) for v in groups.values()}) == 3
+    for t in planned:
+        assert t.spin_deg in tricks.SPINS[t.kind]
+        m = tricks.motion(t)
+        labels = tricks.labels(t, m)
+        assert labels["inversions"] == {"flat": 0, "cork": 1, "double_cork": 2}[t.kind]
+        assert labels["group"] == t.group
+        # Ground either side of the air, so the segmenter sees both classes.
+        assert labels["takeoff_frame"] > 0 and labels["frames"] - 1 > labels["landing_frame"]
+        if t.grab == "none":
+            assert labels["grab_start_frame"] == -1
+        else:
+            assert labels["takeoff_frame"] < labels["grab_start_frame"] < labels["landing_frame"]
+    # Extending the set later numbers on; it never renames what exists.
+    more = tricks.scale_plan(2, seed=5, start=13, group_size=4)
+    assert [t.name[:10] for t in more] == ["synthb0013", "synthb0014"]
+    assert more[0].group == "synthbg003"
+
+
+def test_long_ground_rides_the_terrain_and_leaves_the_air_alone():
+    import copy
+    import re
+    from pathlib import Path
+
+    # tricks.py mirrors animate.py's pelvis drops, which need bpy to import.
+    source = (Path(tricks.__file__).parent / "blender" / "animate.py").read_text()
+    for name in ("DROP_STANDING", "DROP_TUCKED"):
+        assert float(re.search(rf"^{name} = ([0-9.]+)", source, re.M).group(1)) \
+            == getattr(tricks, name)
+
+    planned = tricks.scale_plan(6, seed=3, start=101, long_ground=True)
+    air = frames = 0
+    for t in planned:
+        m = tricks.motion(t)
+        flat = copy.deepcopy(t)
+        flat.terrain = False
+        reference = tricks.motion(flat)
+        T, L = m.takeoff_frame, m.landing_frame
+        # The air is exactly the trick the labels describe.
+        assert np.allclose(m.rotation[T:L + 1], reference.rotation[T:L + 1])
+        assert np.allclose(m.position[T:L + 1], reference.position[T:L + 1])
+        labels = tricks.labels(t, m)
+        assert labels["inversions"] == {"flat": 0, "cork": 1, "double_cork": 2}[t.kind]
+        air += labels["air_frames"]
+        frames += labels["frames"]
+
+        board = m.position - m.rotation[:, :, 2] * tricks._drop(m.tuck)[:, None]
+        lip, k = board[T], np.deg2rad(t.kicker_deg)
+        deck_z = lip[2] - tricks.DECK_BELOW_LIP
+        ramp_start = lip[1] - tricks.DECK_BELOW_LIP / np.tan(k)
+        before = board[:T]
+        on_deck = before[:, 1] <= ramp_start
+        # On the snow before the lip: on the deck, or on the kicker's slope.
+        assert np.allclose(before[on_deck, 2], deck_z)
+        assert np.allclose(before[~on_deck, 2], deck_z + (before[~on_deck, 1] - ramp_start) * np.tan(k))
+        # Down the landing, never below it, and slowing down.
+        touch, land = board[L], np.deg2rad(t.landing_deg)
+        after = board[L + 1:]
+        on_landing = after[:, 1] <= touch[1] + tricks.LANDING_RUN_M * np.cos(land)
+        assert np.allclose(after[on_landing, 2], touch[2] - np.tan(land) * (after[on_landing, 1] - touch[1]))
+        speed = np.linalg.norm(np.diff(after, axis=0), axis=1)
+        assert speed[-1] < speed[0]
+        # No ground frame turns the body faster than a rider can.
+        fps30 = [rotation_angle(m.rotation[i + 1] @ m.rotation[i].T) * t.slowmo
+                 for i in range(len(m.t) - 1) if i < T - 1 or i > L]
+        assert np.rad2deg(max(fps30)) < 12.0
+    assert air / frames < 0.4
+
+
+def test_trick_json_round_trips_with_group_seeds():
+    t = tricks.scale_plan(1, seed=2)[0]
+    assert tricks.Trick.from_json(t.to_json()) == t
+    old = ('{"name": "x", "spin_deg": 360, "kind": "flat", "direction": "frontside", '
+           '"stance": "regular", "grab": "none", "camera_angle": "side", "slowmo": 1.0, '
+           '"seed": 0, "grab_window": [0.3, 0.7]}')
+    assert tricks.Trick.from_json(old).rider_seed is None
