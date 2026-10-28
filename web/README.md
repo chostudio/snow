@@ -68,6 +68,11 @@ of up to 20 frames; its sense is read once per air from net vertical yaw, and
 a turn the other way at either end (a wind-up) is trimmed off. Reading the
 sense frame by frame split synthetic corks wherever the pipeline read a
 stretch backwards ([../docs/validation.md](../docs/validation.md)).
+When `snow features` ran with segmenter weights its table carries
+`airborne_prob`, and the exporter then takes the learned segmenter's airs
+instead (`--air rate` refuses them; `source.air_detector` records which).
+The segmenter is measured on synthetic clips only and is not for real
+footage yet ([../docs/segmenter.md](../docs/segmenter.md)).
 The report labels the one length that is camera-relative rather than quietly
 printing it as a pop height.
 

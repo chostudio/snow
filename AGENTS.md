@@ -55,15 +55,19 @@ alone. That is the main reason the pipeline is debuggable, so preserve it.
 | `src/snow/config.py` | paths, endpoint settings, `.env` loading | — |
 | `src/snow/cli.py` | argparse surface for every stage | — |
 | `src/snow/synth/` | synthetic tricks with exact labels: Nova-77 rider in Blender, renders, comparison | [docs/synthetic.md](docs/synthetic.md) |
+| `src/snow/learn/` | model A, the per-frame airborne segmenter: inputs, training, evaluation, real-air label format | [docs/segmenter.md](docs/segmenter.md) |
 | `web/` | review dashboard + session exporter | [web/README.md](web/README.md) |
 
 Cross-cutting: **[docs/validation.md](docs/validation.md)** — what is actually
 proven, what is not, and which claims you may not make. Read it before you
 write anything user-facing about accuracy.
 
-Planned, not built: **[docs/training.md](docs/training.md)** — the design for
-the learned half (airborne segmenter, trick classifier, judging score). Nothing in it exists
-in the repo yet; do not treat it as describing current behaviour. Its
+**[docs/training.md](docs/training.md)** is the design for the learned half
+(airborne segmenter, trick classifier, judging score). Only model A, the
+segmenter, is built ([docs/segmenter.md](docs/segmenter.md)): measured on
+synthetic clips only, opt-in via `snow features --segmenter`, and **not to
+be enabled on real footage** until a hand-labelled gold set exists. The
+classifier and the judge are not built. Its
 **Synthetic ground truth in Omniverse** section is now built, as
 `snow synth` ([docs/synthetic.md](docs/synthetic.md)): parametric tricks on a
 rider rigged as the NIM's own 77-joint skeleton, rendered and run through the
@@ -90,6 +94,8 @@ Everything under `data/` is gitignored. For a clip named `run1`:
 | `web/public/sessions/run1/` | `export_session.py` | `session.json` + `clip.mp4` |
 | `data/synth/<clip>/` | `snow synth` | trick, exact labels, ground truth, scene USD, render |
 | `data/poses/<clip>-oracle.*` | `snow synth prepare` | ground truth in the NIM's schema, through `features` |
+| `data/models/segmenter/` | `snow segmenter` | dataset bundles, evaluation runs; weights also in S3 |
+| `data/weights/segmenter.pt` | you, by hand | segmenter weights `snow features` picks up by default; absent, the old heuristic runs |
 
 ## Invariants
 
@@ -150,7 +156,7 @@ git diff --cached | grep -niE "nvapi-|api[_-]key|secret|bearer"
 ```bash
 source .venv/bin/activate
 snow doctor                 # tools, packages, vendored client, endpoint, key
-python -m pytest -q         # 81 tests, ~20s, no network and no GPU
+python -m pytest -q         # 99 tests, ~20s, no network and no GPU
 ```
 
 The venv is pinned to **Python 3.12**: the NVIDIA client supports 3.10–3.12
@@ -167,7 +173,7 @@ TypeScript and must stay console-clean.
 ### Testing
 
 Tests are fast, hermetic and run without the NIM. The suite is the real
-specification for eight things:
+specification for nine things:
 
 - `tests/test_bbox_format.py` — parses our annotation with **NVIDIA's own
   reader**, not a reimplementation of it.
@@ -190,6 +196,11 @@ specification for eight things:
 - `tests/test_synth.py` — synthetic tricks really have the inversions their
   names claim, labels are measured from motion, and ground truth in the NIM's
   schema obeys the same forward kinematics as the NIM's own output.
+- `tests/test_segmenter.py` — the segmenter's inputs are scale-free and
+  identical for training and serving, a mirror changes only what it should,
+  no window or interpolation crosses a cut, folds never split a group,
+  oracle skeletons are refused, and without weights `snow features` runs
+  the old heuristic. Torch-dependent cases skip without torch.
 
 When you change measurement code, add the synthetic case that pins the
 property, not a regression test against whatever number it printed today.
