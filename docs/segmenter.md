@@ -215,9 +215,13 @@ should include long riding, standing and non-trick stretches.
 The gold set is about 50 to 100 real airs with takeoff and landing frames,
 held out by event. Boundaries take roughly 100 airs an hour (training.md).
 
+The easy way is `snow label` ([labelling.md](labelling.md)): a local page
+with a frame-accurate player, the machines' guesses beside it, a guide for
+beginners, and autosave to `data/labels/real_airs.csv`. By hand:
+
 ```bash
 snow segmenter template                 # data/labels/airs.csv, one row per clip in data/clips
-snow segmenter build --gold data/labels/airs.csv
+snow segmenter build --gold data/labels/airs.csv     # or data/labels/real_airs.csv
 ```
 
 Columns (`learn/labels.py`; `build` refuses a file that fails `validate`):
@@ -232,6 +236,7 @@ Columns (`learn/labels.py`; `build` refuses a file that fails `validate`):
 | `sure` | `y`, or `n` when a boundary is hidden (cut, occlusion, blur) |
 | `labeller`, `notes` | free text |
 | `frames`, `fps`, `slowmo_factor` | filled in by the template from the clip's metadata; leave them |
+| `spin`, `direction`, `axis`, `grab`, `stance`, `switch` | optional, the trick in the classifier's factored heads; every one admits `unsure`, blank means not labelled (values in `learn/labels.py`, how to read them in [labelling.md](labelling.md)) |
 
 Conventions that matter:
 

@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>snow label</title>
+<link rel="stylesheet" href="/static/label.css">
+</head>
+<body>
+<header>
+  <h1>snow label</h1>
+  <span class="sub">hand labels for real airs</span>
+  <span id="save-status" class="save-status">loading</span>
+</header>
+<main>
+  <nav id="clips" aria-label="clips">
+    <h2>Clips</h2>
+    <ul id="clip-list"></ul>
+    <p class="hint">New clips appear here once they are in <code>data/clips</code>; reload the page.</p>
+  </nav>
+
+  <section id="work">
+    <div id="clip-head">
+      <h2 id="clip-title">pick a clip</h2>
+      <div id="clip-facts" class="facts"></div>
+    </div>
+    <div id="stage" class="stage">
+      <video id="video" preload="auto" playsinline muted></video>
+      <canvas id="overlay"></canvas>
+      <div id="frame-badge" class="frame-badge">frame -</div>
+    </div>
+    <div class="controls">
+      <button data-step="-10" title="Shift+Left">&laquo; 10</button>
+      <button data-step="-1" title="Left">&lsaquo; 1</button>
+      <button id="play" title="Space">play</button>
+      <button data-step="1" title="Right">1 &rsaquo;</button>
+      <button data-step="10" title="Shift+Right">10 &raquo;</button>
+      <label>speed
+        <select id="speed">
+          <option value="0.125">1/8 (1)</option>
+          <option value="0.25">1/4 (2)</option>
+          <option value="0.5">1/2 (3)</option>
+          <option value="1" selected>1x (4)</option>
+        </select>
+      </label>
+      <label class="toggle"><input type="checkbox" id="skeleton" checked> skeleton (s)</label>
+      <span id="frame-readout" class="readout"></span>
+    </div>
+    <input id="scrub" type="range" min="0" max="0" value="0" step="1" aria-label="scrub">
+    <canvas id="timeline" height="76" title="click to jump"></canvas>
+    <div class="legend">
+      <span class="sw you"></span> your airs
+      <span class="sw rate"></span> rate detector (machine)
+      <span class="sw seg"></span> segmenter (machine)
+      <span class="sw prob"></span> segmenter P(air)
+      &nbsp;| skeleton: <span style="color:#ff5d8f">&#9679;</span> head
+      <span style="color:#d4a800">&#9679;</span> left foot
+      <span style="color:#1d9bd1">&#9679;</span> right foot
+      (the pose model's left/right, inferred: check by eye)
+    </div>
+
+    <div id="machine" class="machine"></div>
+
+    <div class="labels-head">
+      <h3>Your labels</h3>
+      <button id="new-air" title="n">+ new air (n)</button>
+      <button id="no-air" class="secondary">no air in this clip</button>
+    </div>
+    <div id="problems" class="problems"></div>
+    <div id="airs"></div>
+  </section>
+
+  <aside id="guide-pane">
+    <div id="guide" class="guide">loading the guide</div>
+  </aside>
+</main>
+<datalist id="event-list"></datalist>
+<script src="/static/label.js"></script>
+</body>
+</html>

@@ -58,6 +58,7 @@ alone. That is the main reason the pipeline is debuggable, so preserve it.
 | `src/snow/config.py` | paths, endpoint settings, `.env` loading | — |
 | `src/snow/coach.py` | Nemotron on the NVIDIA API over a bundle's measurements; schema-checked `CoachReport` | [docs/coach.md](docs/coach.md) |
 | `src/snow/serve.py` | `snow serve`: the dashboard's routes plus `POST /<name>/coach`, stdlib only | [docs/coach.md](docs/coach.md) |
+| `src/snow/label/` | `snow label`: the hand-labelling page (stdlib server, plain JS in `static/`), machine pre-fills in `prefill.py`, the guide rendered from `docs/labelling.md` | [docs/labelling.md](docs/labelling.md) |
 | `src/snow/cli.py` | argparse surface for every stage | — |
 | `src/snow/synth/` | synthetic tricks with exact labels: Nova-77 rider in Blender, renders, comparison | [docs/synthetic.md](docs/synthetic.md) |
 | `src/snow/learn/` | the learned half: model A, the per-frame airborne segmenter (`snow segmenter`), and model B, the trick classifier (`snow classify`) | [docs/segmenter.md](docs/segmenter.md), [docs/classifier.md](docs/classifier.md) |
@@ -105,6 +106,8 @@ Everything under `data/` is gitignored. For a clip named `run1`:
 | `data/models/segmenter/` | `snow segmenter` | dataset bundles, evaluation runs; weights also in S3 |
 | `data/weights/segmenter.pt` | you, by hand | segmenter weights `snow features` picks up by default; absent, the old heuristic runs |
 | `data/models/classifier/` | `snow classify` | dataset, `classifier.pt` (weights in S3, never committed), cv and split reports |
+| `data/labels/real_airs.csv` | `snow label` | the human gold set: airs and factored tricks (`learn/labels.py` format) |
+| `data/labels/prefill/<clip>.json` | `snow label` | cached machine guesses, keyed by input sizes and mtimes; safe to delete |
 
 ## Invariants
 
@@ -186,7 +189,7 @@ TypeScript and must stay console-clean.
 ### Testing
 
 Tests are fast, hermetic and run without the NIM. The suite is the real
-specification for nine things:
+specification for these things:
 
 - `tests/test_bbox_format.py` — parses our annotation with **NVIDIA's own
   reader**, not a reimplementation of it.
@@ -222,6 +225,17 @@ specification for nine things:
   reverses the turn and flips sense and stance but not frontside/backside, slow
   motion encodes like real time, an air is never read across a cut, and
   prediction is mirror-equivariant.
+- `tests/test_labelling.py` — `snow label`: an old labels CSV still loads,
+  every trick field admits `unsure` and the page offers exactly the values the
+  CSV accepts, a save keeps other clips' rows and unknown columns and is what
+  `gold_sources` reads, every guide link the page uses has a section, and the
+  server lists real clips only, seeks the video and refuses other paths.
+
+To label real footage: `snow label` ([docs/labelling.md](docs/labelling.md)).
+Machine guesses on that page come from the rate detector, the segmenter and
+the classifier; they are never written to the CSV unless the labeller adopts
+and corrects them, and the weights are read from `data/models/`, never
+installed into `data/weights/`.
 
 When you change measurement code, add the synthetic case that pins the
 property, not a regression test against whatever number it printed today.

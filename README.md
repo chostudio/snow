@@ -145,6 +145,21 @@ asks Nemotron. Without it the panel shows a rule-based template and says so.
 
 <small>A 24-second 1080p clip is about 19 seconds of inference.</small>
 
+### Label real airs
+
+The models are measured on synthetic renders only; real labels are the gap.
+One command opens a labelling page on localhost:
+
+```bash
+snow label            # http://127.0.0.1:8765; --fetch first copies the model weights from S3
+```
+
+It lists the real clips in `data/clips`, plays them frame by frame with the
+skeleton on top, pre-fills the machines' guesses (clearly marked as such),
+autosaves to `data/labels/real_airs.csv`, and has a beginner's guide to
+snowboard tricks beside the player ([docs/labelling.md](docs/labelling.md)).
+`snow segmenter build --gold data/labels/real_airs.csv` reads that file.
+
 ## Two things that will bite you
 
 **Broadcast cuts shatter tracking.** Every camera cut makes the tracker issue
@@ -197,6 +212,7 @@ Read it before you quote a number.
 | [docs/usd.md](docs/usd.md) | USD / Omniverse export |
 | [docs/validation.md](docs/validation.md) | what is proven and what is not |
 | [docs/coach.md](docs/coach.md) | the Nemotron coach: what it sees, what it may return |
+| [docs/labelling.md](docs/labelling.md) | `snow label`, and how to tell tricks apart if you have never watched snowboarding |
 | [docs/training.md](docs/training.md) | **planned:** how the models would be trained |
 | [web/README.md](web/README.md) | the review dashboard |
 | [AGENTS.md](AGENTS.md) | architecture map, for agents working on the code |
