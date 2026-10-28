@@ -112,7 +112,9 @@ def frame_intervals_are_constant(path: Path, tolerance: float = 0.002) -> tuple[
     """
     out = _run([
         _require("ffprobe"), "-v", "error", "-select_streams", "v:0",
-        "-show_entries", "frame=pts_time",
+        # ffprobe 5+ calls it pts_time, 4.x pkt_pts_time (Ubuntu 22.04);
+        # each prints only the one it knows, so asking for both is safe.
+        "-show_entries", "frame=pts_time,pkt_pts_time",
         "-of", "default=noprint_wrappers=1:nokey=1", str(path),
     ])
     if out.returncode != 0:

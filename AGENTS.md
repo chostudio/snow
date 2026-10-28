@@ -143,7 +143,9 @@ Each is load-bearing and each is explained in the linked doc.
    inverted rider (the NIM reads them fine when boxed). Stitching and rotated
    recovery in `track.py` fixed the boxes, and the dashboard's air detector
    now reads each air's sense once: the pipeline names 13 of 20 (7 of 13
-   corks, from 1); most of the rest over-read a step from pose jitter.
+   corks, from 1); most of the rest over-read a step from pose jitter. On
+   the 285-clip training set it names only 116 of 281, and 17 of 69 at 4x
+   slow motion: the 20 were a narrow sample.
    `axis_spin_deg` undercounts corks by definition; never promote it back.
    → `docs/validation.md`, `docs/rotation.md`, `docs/tracking.md`
 

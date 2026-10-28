@@ -8,8 +8,11 @@ was built and how to run it. Results are in [validation.md](validation.md).
 snow synth plan        # 20 tricks -> data/synth/<clip>/{trick.json,motion.npz,labels.json}
 snow synth render      # headless Blender: rig, animate, venue, camera, GT, USD, frames, mp4
 snow synth prepare     # GT in the NIM's schema + the "oracle" run through snow features
-snow synth pipeline    # the unchanged pipeline on each render (NIM calls spaced 120 s)
+snow synth pipeline    # the unchanged pipeline on each render (hosted NIM: calls spaced 120 s)
 snow synth compare     # error tables, per kind and per camera angle
+
+snow synth plan --scale 400 --seed 1           # the training set: synthb0001.. (see below)
+snow synth render --engine cycles --only synthb0001   # GPU render on a headless Linux box
 ```
 
 Every step reads and writes files under `data/synth/<clip>/`, so any step can
@@ -21,6 +24,12 @@ be re-run alone, for all clips or `--only synth14`.
   **MPFB 2.0** extension installed. Headless runs enable it for their own
   session; the user's saved preferences are not touched.
 - **ffmpeg**, and the NIM key in `.env`, as for real clips.
+- For batches on a headless Linux GPU box (how the training set was made):
+  the Blender 4.3 Linux tarball with MPFB copied into
+  `~/.config/blender/4.3/extensions/`, `--engine cycles` (EEVEE has no GPU
+  context there and falls back to software GL), an ffmpeg new enough for
+  `-fps_mode` (5.1+; Ubuntu 22.04 ships 4.4), and `LD_LIBRARY_PATH` unset
+  on AWS Deep Learning AMIs, whose system cuDNN breaks torch's.
 - For the Omniverse render: a Linux machine with an **RTX** GPU (L40S, RTX
   6000 Ada, A6000, 4090; not H100/A100, which have no RT cores) and Isaac Sim.
 
@@ -133,6 +142,8 @@ camera), that is real and is recorded per frame as `visible`.
 | `gt.camera.npz` | the true camera as a `CameraTrack` |
 | `scene.blend`, `scene.usdc` | the whole scene; USD is the Replicator input |
 | `frames/`, `render.mp4` | the render, and what `snow run` ingests |
+| `renderer.txt` | `blender` (EEVEE) or `blender-cycles` |
+| `compare.json` | training-set clips only: both variants' scores, kept when the heavy files are pruned |
 
 ## Two variants per clip
 
@@ -158,9 +169,83 @@ unchanged; the labels do not change, because it is the same stage.
 must go through `prepare` and agree with the Blender ground truth before
 its numbers are used.
 
+## The training set
+
+October 2026: **285 clips**, `synthb0001` to `synthb0285`, rendered on one
+AWS L4 (`g6.xlarge`) and run through the unchanged pipeline against a
+self-hosted NIM. For the airborne segmenter and the factored trick
+classifier, which train on the pipeline's output, never on the rig
+([training.md](training.md#train-on-nim-output-never-on-the-rigs-clean-skeleton)).
+
+```bash
+snow synth plan --scale 400 --seed 1                              # rendered 0001-0146
+snow synth plan --scale 254 --start 147 --seed 1 --long-ground    # replaced 0147-0400; rendered 0147-0285
+SNOW_NIM_PREVIEW=0 SNOW_NIM_TARGET=127.0.0.1:8001 SNOW_SYNTH_PRUNE=1 \
+  scripts/synth_batch.sh render synthb &  scripts/synth_batch.sh pipeline synthb
+```
+
+The draws depend on the plan's size, so these exact commands reproduce the
+clips; a plan of 146 would not. Every prefix of a plan is balanced, so
+rendering in order and stopping at the budget leaves a balanced set. The
+unrendered plans 0286-0400 are kept on the box in `data/synth/_unrendered/`.
+
+**Balanced** in shuffled blocks across what the classifier learns, so any
+prefix is balanced: kind in thirds (94 flat, 95 cork, 96 double cork), spin
+evenly within each kind (flat 180-1440, cork 540-1440, double cork
+900-1440), direction (142 / 143), stance, grab (40-41 of each of the seven,
+`none` included), camera position (70-72 each) and slow motion 1-4x (71-72
+each). Each factor is shuffled on its own. Inversions match the kind on
+every clip (0 / 1 / 2).
+
+**Split groups.** Clips come in groups of four: one rider (body shape,
+outfit, board) at one venue (dressing, sun), like one athlete's runs at one
+event; 72 groups. `labels.json` and the manifest carry `group`; keep a group
+on one side of any train/test split.
+
+**Two families of ground time**, because a segmenter trained on the first
+one called a real rider airborne while standing still:
+
+| | clips | frames | airborne | approach | ride-out |
+|---|---|---|---|---|---|
+| `short_ground` (0001-0146) | 146 | 50,356 | 60.8% | 0.5-1.3 s straight up the kicker | 0.5-1.3 s straight down the landing |
+| `long_ground` (0147-0285) | 139 | 96,891 | 30.1% | 1.6-4.0 s, half stood still for 0.5-1.5 s first | 2.0-4.5 s, carving to a stop |
+
+`long_ground` (`Trick.terrain`, `tricks._ground`) rides the venue's own
+surface: stood still at the top of the deck, gathering speed along it, a
+transition onto the kicker of about 15 m radius, then down the landing and
+onto the outrun. 70% carve S-turns sized by a 17-39 degree lean, and every
+rider has a slow balance wobble of 0.5-3 degrees. Air frames are exactly
+those of the same trick without it, so the labels are unchanged
+(`test_synth.py`). No ground frame turns the body faster than 12 degrees
+per 30 fps frame.
+
+**A flaw in `short_ground`.** Its approach is the kicker's line extended
+backwards, which is below the deck for approaches longer than the ramp: 75
+of the 146 clips start with the board under the snow, 1,267 frames (2.5% of
+the family's). The rider is hidden there, and `gt_raw.npz`'s per-frame
+`visible` says so; mask those frames when training. `long_ground` has none.
+
+**Cost.** Median per clip, short / long: 332 / 657 frames, render 277 / 541
+s (Cycles, 16 samples, OptiX denoiser, about 0.6 s a frame plus about 30 s
+to build the scene), pipeline 100 / 161 s, on two render loops and one
+pipeline loop. 285 clips took about 18.6 hours of the L4, about $15, or
+about $0.05 a clip.
+
+**Where it lives.** Locally, lean: `data/synth/<clip>/` (trick, labels,
+motion, `gt_raw.npz`, true camera, render, `compare.json`), the pipeline's
+`data/poses/<clip>.*` and `data/clips/<clip>.{bbox.txt,meta.json,tracks.json}`.
+Everything, including `scene.blend`, `scene.usdc` and the ground truth in
+the NIM's schema, is under `s3://snow-artifacts-009160029345/synth/data/` in
+the same layout. `data/synth/MANIFEST.scale.jsonl` (also at
+`s3://.../synth/MANIFEST.scale.jsonl`) has one line per clip: `name`,
+`status`, `group`, `renderer`, `labels`, file paths, render and pipeline
+seconds. All 285 are `done`. Errors: [validation.md](validation.md#synthetic-training-set-285-clips).
+
 ## Limits
 
-- **Blender EEVEE renders, not Replicator**, for the published table. Body
+- **Blender renders, not Replicator**: EEVEE for the first 20, Cycles for
+  the training set (the same scene and materials; Cycles was checked
+  against EEVEE on one frame and matches in exposure). Body
   and board are plain materials: no cloth, hair, snow spray or crowd motion.
   Renders may be easier or harder for the NIM than broadcast footage, so
   synthetic accuracy is not a claim about real clips (see

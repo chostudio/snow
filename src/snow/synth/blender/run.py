@@ -62,6 +62,7 @@ def main(argv: list[str]) -> None:
     parser.add_argument("--width", type=int, default=1280)
     parser.add_argument("--height", type=int, default=720)
     parser.add_argument("--samples", type=int, default=16)
+    parser.add_argument("--engine", choices=["eevee", "cycles"], default="eevee")
     parser.add_argument("--no-render", action="store_true")
     parser.add_argument("--no-usd", action="store_true")
     args = parser.parse_args(argv)
@@ -69,13 +70,19 @@ def main(argv: list[str]) -> None:
 
     trick, motion = load(clip)
     frames = len(motion.t)
-    rng = np.random.default_rng(trick.seed + 101)
-    rig, body, board, controls = rider.build(trick.body, seed=trick.seed)
+    # Clips in one split group share a venue and a rider; older tricks have
+    # no group seeds and use their own.
+    venue_seed = getattr(trick, "venue_seed", None)
+    rider_seed = getattr(trick, "rider_seed", None)
+    rng = np.random.default_rng((trick.seed if venue_seed is None else venue_seed) + 101)
+    rig, body, board, controls = rider.build(
+        trick.body, seed=trick.seed if rider_seed is None else rider_seed)
     animate.key(rig, board, controls, trick, motion)
     layout = venue.build(trick, motion, rng)
     cam = venue.camera(trick, motion, rng, args.width, args.height)
     cleared = venue.clear_sightlines(cam, motion)
-    venue.render_settings(args.width, args.height, args.samples, str(clip / "frames"))
+    venue.render_settings(args.width, args.height, args.samples, str(clip / "frames"),
+                          engine=args.engine)
 
     joints = animate.sample(rig, frames)
     truth = venue.camera_truth(cam, frames, args.width)

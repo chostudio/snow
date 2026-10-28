@@ -173,11 +173,15 @@ def build(trick, motion, rng: np.random.Generator) -> dict:
 
     wide = 40.0
     # The in-run deck, the knuckle, the landing and the outrun, one surface.
+    # Long enough for any approach and ride-out the path holds; unchanged
+    # for the short ones the first clips have.
+    top_y = min(ramp_start - 60.0, float(path[:, 1].min()) - 20.0)
+    end_y = max(bottom_y + 120.0, float(path[:, 1].max()) + 30.0)
     profile = [
-        (ramp_start - 60.0, deck_z), (knuckle_y - 1.5, deck_z),
+        (top_y, deck_z), (knuckle_y - 1.5, deck_z),
         (knuckle_y + 1.5, landing_z(knuckle_y + 1.5)),
         (bottom_y, bottom_z), (bottom_y + 15.0, bottom_z - 3.0),
-        (bottom_y + 120.0, bottom_z - 3.0),
+        (end_y, bottom_z - 3.0),
     ]
     _strip("Hill", [[(x, y, z) for x in np.linspace(-wide, wide, 9)]
                     for y, z in profile], snow)
@@ -412,12 +416,53 @@ def camera_truth(cam, frames: int, width: int) -> dict[str, np.ndarray]:
     return {"world_to_camera": rotations, "centre": centres, "focal_px": focal}
 
 
-def render_settings(width: int, height: int, samples: int, out_dir: str) -> None:
+def _cycles_gpu(samples: int) -> None:
+    """Cycles on the GPU (OptiX, else CUDA), denoised, few bounces.
+
+    For headless Linux boxes, where EEVEE has no GPU context and falls back
+    to software GL. Few samples plus the denoiser look close to EEVEE's
+    plain materials; what matters to the NIM is the silhouette and blur.
+    """
     scene = bpy.context.scene
-    try:
-        scene.render.engine = "BLENDER_EEVEE_NEXT"
-    except TypeError:
-        scene.render.engine = "BLENDER_EEVEE"
+    scene.render.engine = "CYCLES"
+    prefs = bpy.context.preferences.addons["cycles"].preferences
+    for kind in ("OPTIX", "CUDA"):
+        try:
+            prefs.compute_device_type = kind
+        except TypeError:
+            continue
+        prefs.get_devices()
+        devices = [d for d in prefs.devices if d.type == kind]
+        if devices:
+            for d in prefs.devices:
+                d.use = d.type == kind
+            scene.cycles.device = "GPU"
+            break
+    scene.cycles.samples = samples
+    scene.cycles.use_adaptive_sampling = True
+    scene.cycles.use_denoising = True
+    # The default denoiser (OpenImageDenoise) runs on the CPU here: 10 s a
+    # frame on a 4-core box, against 0.3 s for OptiX's on the GPU.
+    if scene.cycles.device == "GPU" and prefs.compute_device_type == "OPTIX":
+        scene.cycles.denoiser = "OPTIX"
+    scene.cycles.max_bounces = 4
+    scene.cycles.diffuse_bounces = 2
+    scene.cycles.glossy_bounces = 2
+    scene.cycles.transmission_bounces = 2
+    scene.cycles.transparent_max_bounces = 4
+    scene.render.use_persistent_data = True
+
+
+def render_settings(width: int, height: int, samples: int, out_dir: str,
+                    engine: str = "eevee") -> None:
+    scene = bpy.context.scene
+    if engine == "cycles":
+        _cycles_gpu(samples)
+    else:
+        try:
+            scene.render.engine = "BLENDER_EEVEE_NEXT"
+        except TypeError:
+            scene.render.engine = "BLENDER_EEVEE"
     scene.render.resolution_x = width
     scene.render.resolution_y = height
     scene.render.resolution_percentage = 100

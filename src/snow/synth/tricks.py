@@ -69,6 +69,20 @@ class Trick:
     tilt_max_deg: float | None = None   # solved, see solve_tilt
     body: dict = field(default_factory=dict)   # MPFB macro values
     camera: dict = field(default_factory=dict)
+    # Split group: clips sharing a rider (body, outfit, board) and a venue
+    # (dressing, sun). Train/test splits must keep a group whole. ``None``
+    # seeds fall back to ``seed``, so the first 20 clips are each their own.
+    group: str = ""
+    rider_seed: int | None = None
+    venue_seed: int | None = None
+    # Ground time (see ``_ground``). ``terrain=False`` is the original model:
+    # a short straight run up the kicker and a straight slide down the
+    # landing, which only holds for approaches under about 0.8 s.
+    terrain: bool = False
+    standing_s: float = 0.0       # stood still at the top before riding in
+    carve_m: float = 0.0          # half-width of the turns on deck and outrun
+    carve_period_s: float = 2.0   # one left-right turn pair, at takeoff speed
+    jitter_deg: float = 0.0       # balance wobble of the whole body
 
     @property
     def spin_sign(self) -> int:
@@ -353,8 +367,195 @@ def motion(trick: Trick) -> Motion:
     wind += sign * trick.prewind_deg * 0.6 * smoothstep(s / 0.15) * (1 - smoothstep((s - 0.25) / 0.35)) * (t >= 0)
     wind += -sign * trick.prewind_deg * (t >= 0) * (1 - smoothstep(t / 0.12))
 
+    if trick.terrain:
+        _ground(trick, t, takeoff, landing, position, rotation, tuck)
     return Motion(t=t, position=position, rotation=rotation, tuck=tuck,
                   grab=grab, wind=wind, takeoff_frame=takeoff, landing_frame=landing)
+
+
+# Pelvis above the board's base, upright, at tuck 0 and 1. Mirrors
+# blender/animate.py, which cannot be imported without bpy; a test pins them.
+DROP_STANDING = 0.88
+DROP_TUCKED = 0.34
+DECK_BELOW_LIP = 6.5   # venue.build: the deck is this far below the lip's board
+LANDING_RUN_M = 40.0   # venue.build: landing slope length before the outrun
+
+
+def _drop(tuck) -> np.ndarray:
+    return DROP_STANDING + (DROP_TUCKED - DROP_STANDING) * np.asarray(tuck)
+
+
+def _smooth_noise(rng: np.random.Generator, n: int, fps: float, scale: float,
+                  corr_s: float = 0.4, dims: int = 3) -> np.ndarray:
+    """Slow random wander, (n, dims), standard deviation about ``scale``."""
+    keep = np.exp(-1.0 / max(1.0, corr_s * fps))
+    raw = rng.normal(0.0, 1.0, (n, dims))
+    # Two passes: one alone is a random walk, rough from frame to frame,
+    # and its sway rates read as hundreds of degrees a second.
+    for _ in range(2):
+        out = np.zeros((n, dims))
+        for i in range(1, n):
+            out[i] = keep * out[i - 1] + raw[i]
+        raw = out
+    sd = out.std(axis=0)
+    return out * (scale / np.where(sd > 0, sd, 1.0))
+
+
+def _gauss(x: np.ndarray, sigma: float) -> np.ndarray:
+    """Gaussian smoothing with the ends held, so a stretch keeps its length."""
+    radius = int(3 * sigma)
+    if radius < 1 or len(x) < 2:
+        return x
+    k = np.exp(-0.5 * (np.arange(-radius, radius + 1) / sigma) ** 2)
+    padded = np.concatenate([np.full(radius, x[0]), x, np.full(radius, x[-1])])
+    return np.convolve(padded, k / k.sum(), mode="valid")
+
+
+def _carve(distance: np.ndarray, amplitude: float, wavelength: float, phase: float):
+    """Lateral offset (m) of S-turns, periodic in distance travelled.
+
+    Periodic in distance, not time, so a rider who slows down turns less
+    often instead of swinging sideways on the spot. The caller derives
+    heading and edge roll from it along the path.
+    """
+    return amplitude * np.sin(2 * np.pi * distance / wavelength + phase)
+
+
+def _ground(trick: Trick, t, takeoff: int, landing: int, position, rotation, tuck) -> None:
+    """Replace the ground frames with riding that follows the venue's terrain.
+
+    Before the takeoff: stood still at the top of the deck for
+    ``standing_s``, then riding the flat deck while gathering speed (in
+    S-turns of ``carve_m`` that straighten out before the kicker), then up
+    the kicker. After the landing: down the landing slope and onto the
+    outrun, carving and slowing to a stop. The board's base stays on the
+    snow surface ``venue.build`` makes from the same path, so the approach
+    and ride-out can be as long as wanted without the rider passing through
+    the hill. A slow balance wobble (``jitter_deg``) rides on top. Air frames
+    are left exactly as they are.
+    """
+    fps = trick.render_fps
+    n = len(t)
+    rng = np.random.default_rng(trick.seed + 31)
+    stance = stance_rotation(trick.stance)
+    v = trick.takeoff_speed
+    k = np.deg2rad(trick.kicker_deg)
+    up_slope = np.array([0.0, np.cos(k), np.sin(k)])
+
+    # Riding crouch with a little life in it; tall while stood still.
+    pre = np.arange(n) < takeoff
+    post = np.arange(n) > landing
+    standing = pre & (t < -trick.approach_s + trick.standing_s)
+    tuck[standing] = 0.05 + 0.15 * smoothstep((t[standing] + trick.approach_s
+                                               - trick.standing_s + 0.4) / 0.4)
+    wobble = _smooth_noise(rng, n, fps, 0.04, dims=1)[:, 0]
+    tuck[pre | post] = np.clip(tuck[pre | post] + wobble[pre | post], 0.0, 1.0)
+
+    # Board base at takeoff, as venue.board_path reads it.
+    board0 = position[takeoff] - rotation[takeoff][:, 2] * _drop(tuck[takeoff])
+    deck_z = board0[2] - DECK_BELOW_LIP
+    ramp_t = DECK_BELOW_LIP / np.sin(k) / v       # seconds on the kicker
+
+    # --- approach: distance before the lip along the run, per frame ----
+    t_pre = t[:takeoff]
+    t_start = -trick.approach_s + trick.standing_s
+    deck_time = max(1e-3, -ramp_t - t_start)
+    u0 = 0.0 if trick.standing_s > 0 else 0.6 * v
+    speed = np.where(t_pre < -ramp_t,
+                     u0 + (v - u0) * smoothstep((t_pre - t_start) / deck_time), v)
+    speed[t_pre < t_start] = 0.0
+    # Distance remaining to the lip, integrated backwards from the takeoff.
+    dist = np.zeros(len(t_pre))
+    for i in range(len(t_pre) - 2, -1, -1):
+        dist[i] = dist[i + 1] + 0.5 * (speed[i] + speed[i + 1]) / fps
+    if takeoff:
+        dist += speed[-1] / fps   # the last frame before the lip is one step out
+    on_ramp = dist <= DECK_BELOW_LIP / np.sin(k)
+    board = np.empty((n, 3))
+    board[:takeoff] = np.where(
+        on_ramp[:, None],
+        board0 - dist[:, None] * up_slope,
+        np.column_stack([np.zeros_like(dist),
+                         board0[1] - DECK_BELOW_LIP / np.tan(k)
+                         - (dist - DECK_BELOW_LIP / np.sin(k)),
+                         np.full_like(dist, deck_z)]))
+    # Pitch eases from flat to the kicker's angle over 8 m, about a real
+    # transition's 15 m radius (60 degrees a second at takeoff speed).
+    ramp_len = DECK_BELOW_LIP / np.sin(k)
+    pitch_pre = trick.kicker_deg * smoothstep((ramp_len + 4.0 - dist) / 8.0)
+    # S-turns on the deck, straight for the last 25 m before the kicker.
+    wavelength = v * trick.carve_period_s
+    carve_pre = _carve(dist, trick.carve_m, wavelength, rng.uniform(0, 2 * np.pi))
+    carve_pre *= 1 - smoothstep((ramp_len + 25.0 - dist) / 15.0)
+    carve_pre *= smoothstep((dist[0] - dist) / 15.0) if takeoff else 1.0   # ease into the first turn
+    board[:takeoff, 0] += carve_pre
+
+    # --- ride-out: down the landing, onto the outrun, slowing to a stop ---
+    k_land = np.deg2rad(trick.landing_deg)
+    touch = position[landing] - rotation[landing][:, 2] * _drop(tuck[landing])
+    t_post = t[landing + 1:] - t[landing]
+    land_v = float(np.hypot(v * np.cos(k), v * np.sin(k) - GRAVITY * trick.air_s)) * 0.8
+    reach = 48.0                                    # stop before the crowd
+    decay = min(reach / land_v, max(trick.rideout_s, 0.5))
+    run = land_v * decay * (1 - np.exp(-t_post / decay))
+    # Terrain profile from the touchdown: landing slope, a knee, flat outrun.
+    prof_s = np.array([0.0, LANDING_RUN_M, LANDING_RUN_M + 15.2, 400.0])
+    prof_y = touch[1] + np.array([0.0, LANDING_RUN_M * np.cos(k_land),
+                                  LANDING_RUN_M * np.cos(k_land) + 15.0,
+                                  LANDING_RUN_M * np.cos(k_land) + 15.0 + 384.8])
+    prof_z = touch[2] + np.array([0.0, -LANDING_RUN_M * np.sin(k_land),
+                                  -LANDING_RUN_M * np.sin(k_land) - 3.0,
+                                  -LANDING_RUN_M * np.sin(k_land) - 3.0])
+    board[landing + 1:, 0] = touch[0]
+    board[landing + 1:, 1] = np.interp(run, prof_s, prof_y)
+    board[landing + 1:, 2] = np.interp(run, prof_s, prof_z)
+    slope_post = np.rad2deg(np.interp(run, [0, LANDING_RUN_M - 3, LANDING_RUN_M + 12, 400],
+                                      [k_land, k_land, 0.0, 0.0]))
+    carve_post = _carve(run, trick.carve_m, wavelength, rng.uniform(0, 2 * np.pi))
+    carve_post *= smoothstep((run - 6.0) / 20.0)
+    board[landing + 1:, 0] += carve_post
+
+    # Heading follows the turns; the body leans into them.
+    yaw = np.zeros(n)
+    roll = np.zeros(n)
+    for sl, lateral in ((slice(0, takeoff), board[:takeoff, 0]),
+                        (slice(landing + 1, n), board[landing + 1:, 0])):
+        forward = board[sl, 1]
+        if len(forward) < 3:
+            continue
+        dx = np.gradient(lateral)
+        dy = np.maximum(np.gradient(forward), 1e-4)
+        yaw[sl] = -np.rad2deg(np.arctan2(dx, dy))
+        accel = np.gradient(np.gradient(lateral)) * fps * fps
+        r = np.clip(np.rad2deg(np.arctan2(accel, GRAVITY)), -45.0, 45.0)
+        # Finite differences are one-sided at a stretch's ends: hold the
+        # neighbouring value there rather than read a spike.
+        h = yaw[sl]
+        r[:3], r[-3:] = r[3], r[-4]
+        h[:2], h[-2:] = h[2], h[-3]
+        # A rider takes a fraction of a second to change edge: low-pass both.
+        roll[sl], yaw[sl] = _gauss(r, 0.15 * fps), _gauss(h, 0.15 * fps)
+
+    jitter = None
+    if trick.jitter_deg:
+        # Faded out around the air, which is left exactly as generated.
+        near = np.minimum(np.abs(t - t[takeoff]), np.abs(t - t[landing]))
+        jitter = _smooth_noise(rng, n, fps, np.deg2rad(trick.jitter_deg))
+        jitter *= smoothstep(near / 0.3)[:, None]
+    final = rot_x(trick.landing_deg) @ rotation[landing]     # upright, landing facing
+    for i in range(n):
+        if takeoff <= i <= landing:
+            continue
+        if i < takeoff:
+            base = rot_x(pitch_pre[i]) @ rot_z(yaw[i]) @ axis_angle(
+                np.array([0.0, 1.0, 0.0]), np.deg2rad(roll[i])) @ stance
+        else:
+            base = rot_x(-slope_post[i - landing - 1]) @ rot_z(yaw[i]) @ axis_angle(
+                np.array([0.0, 1.0, 0.0]), np.deg2rad(roll[i])) @ final
+        if jitter is not None and np.linalg.norm(jitter[i]) > 1e-9:
+            base = axis_angle(jitter[i], float(np.linalg.norm(jitter[i]))) @ base
+        rotation[i] = base
+        position[i] = board[i] + base[:, 2] * _drop(tuck[i])
 
 
 def labels(trick: Trick, m: Motion) -> dict:
@@ -378,7 +579,9 @@ def labels(trick: Trick, m: Motion) -> dict:
     axis_spin = float(np.rad2deg((steps @ axis).sum()))
     axis_tilt = float(np.rad2deg(np.arccos(min(1.0, abs(float(axis @ UP))))))
     tilt = tilt_series(m.rotation[m.takeoff_frame:m.landing_frame + 1])
+    held = np.flatnonzero(m.grab > 0.5)
     return {
+        "group": trick.group or trick.name,
         "name": trick.name,
         "spin_nominal_deg": trick.spin_deg,
         "kind": trick.kind,
@@ -399,6 +602,9 @@ def labels(trick: Trick, m: Motion) -> dict:
         "landing_frame": m.landing_frame,
         "air_frames": m.landing_frame - m.takeoff_frame,
         "air_s_real": trick.air_s,
+        # Frames with the hand more than half way onto the board; -1 if none.
+        "grab_start_frame": int(held[0]) if len(held) else -1,
+        "grab_end_frame": int(held[-1]) if len(held) else -1,
         "frames": len(m.t),
         "output_fps": OUTPUT_FPS,
     }
@@ -499,3 +705,137 @@ def plan(seed: int = 0) -> list[Trick]:
         solve_tilt(trick)
         tricks.append(trick)
     return tricks
+
+
+# --- the training set -------------------------------------------------------
+
+# Spins each kind can carry. A cork needs its inversion clear of the landing
+# (180 < spin - 90), a double cork two of them; past 1440 the air times here
+# would need spin rates no rider holds.
+SPINS = {
+    "flat": (180, 360, 540, 720, 900, 1080, 1260, 1440),
+    "cork": (540, 720, 900, 1080, 1260, 1440),
+    "double_cork": (900, 1080, 1260, 1440),
+}
+SLOWMO = (1.0, 2.0, 3.0, 4.0)
+SCALE_PREFIX = "synthb"
+
+
+def _balanced(values, count: int, rng: np.random.Generator) -> list:
+    """``count`` draws covering ``values`` evenly, in shuffled blocks.
+
+    Each run of ``len(values)`` draws is a permutation of ``values``, so any
+    prefix is balanced to within one per value: a set cut short by its
+    budget is still balanced.
+    """
+    out: list = []
+    while len(out) < count:
+        out += [values[i] for i in rng.permutation(len(values))]
+    return out[:count]
+
+
+def scale_plan(count: int, seed: int = 1, start: int = 1, group_size: int = 4,
+               prefix: str = SCALE_PREFIX, long_ground: bool = False) -> list[Trick]:
+    """A balanced, randomised training set of ``count`` tricks.
+
+    Balanced across the factored labels the classifier learns: kind (flat,
+    cork, double cork) in thirds and spin evenly within each kind; direction,
+    stance, grab, camera position and slow-motion factor each evenly. Each
+    factor is shuffled on its own, so no two are correlated by construction.
+
+    Clips come in **split groups** of ``group_size``: one rider (body, outfit,
+    board) at one venue (dressing, sun), as one athlete's runs at one event.
+    A group must stay on one side of a train/test split, or a model can learn
+    the rider and the venue instead of the trick.
+
+    Everything else is drawn per clip and wider than ``plan``: air time,
+    takeoff speed, kicker and landing angles, how long the approach and the
+    ride-out last (so every clip has frames on the ground either side of the
+    air), pre-wind, tuck, grab timing, and the camera's placement and framing.
+    Deterministic in ``seed``, and every prefix of the list is balanced, so
+    plan the whole set at once and render it in order. A second call with a
+    new ``start`` grows a set (numbers and groups continue from it) without
+    renaming what exists.
+
+    ``long_ground`` gives each clip far more time on the snow than in the
+    air (about 30% airborne against about 60%), riding the venue's terrain
+    (``_ground``): half stand still at the top first, most carve S-turns
+    on the deck and the outrun, and every rider wobbles a little. A
+    segmenter trained only on short run-ins learns that riding is flying.
+    """
+    rng = np.random.default_rng(seed * 7919 + start)
+    kinds = _balanced(KINDS, count, rng)
+    spin_queue = {k: _balanced(SPINS[k], kinds.count(k), rng) for k in KINDS}
+    directions = _balanced(("frontside", "backside"), count, rng)
+    stances = _balanced(("regular", "goofy"), count, rng)
+    grabs = _balanced(GRABS, count, rng)
+    angles = _balanced(CAMERA_ANGLES, count, rng)
+    slowmos = _balanced(SLOWMO, count, rng)
+
+    tricks = []
+    for i in range(count):
+        number = start + i
+        g = (number - 1) // group_size
+        group_rng = np.random.default_rng(seed * 100_003 + g)
+        body = body_params(group_rng)
+        rider_seed = int(group_rng.integers(1, 2**31))
+        venue_seed = int(group_rng.integers(1, 2**31))
+        kind = kinds[i]
+        spin = int(spin_queue[kind].pop(0))
+        clip_seed = seed * 1_000_003 + number
+        r = np.random.default_rng(clip_seed)
+        grab_start = float(r.uniform(0.1, 0.55))
+        grab_len = float(r.uniform(0.15, 0.45))
+        # Bigger spins need more air: a 1440 in under 2.5 s is not ridden.
+        air_lo = 2.0 + 0.5 * (spin - 180) / 1260
+        trick = Trick(
+            name=f"{prefix}{number:04d}_{kind}_{spin}",
+            spin_deg=spin, kind=kind, direction=directions[i], stance=stances[i],
+            grab=grabs[i], camera_angle=angles[i], slowmo=float(slowmos[i]),
+            seed=clip_seed,
+            air_s=round(float(r.uniform(air_lo, 3.3)), 2),
+            approach_s=round(float(r.uniform(0.5, 1.3)), 2),
+            rideout_s=round(float(r.uniform(0.5, 1.3)), 2),
+            kicker_deg=round(float(r.uniform(25.0, 31.0)), 1),
+            landing_deg=round(float(r.uniform(29.0, 35.0)), 1),
+            takeoff_speed=round(float(r.uniform(14.5, 17.5)), 2),
+            prewind_deg=round(float(r.uniform(5, 60)), 1),
+            tuck_depth=round(float(r.uniform(0.25, 0.9)), 2),
+            grab_window=(round(grab_start, 2), round(min(0.85, grab_start + grab_len), 2)),
+            tilt_azimuth_deg=round(float(r.uniform(-40, 40) + r.choice([0, 180])), 1),
+            body=body,
+            camera=camera_params(angles[i], r),
+            group=f"{prefix}g{g:03d}",
+            rider_seed=rider_seed,
+            venue_seed=venue_seed,
+        )
+        if long_ground:
+            g = np.random.default_rng(clip_seed + 5)
+            trick.terrain = True
+            trick.standing_s = round(float(g.uniform(0.5, 1.5)), 2) if g.uniform() < 0.5 else 0.0
+            trick.approach_s = round(trick.standing_s + float(g.uniform(1.6, 4.0)), 2)
+            trick.rideout_s = round(float(g.uniform(2.0, 4.5)), 2)
+            # Turns sized by how hard the rider leans into them (lateral
+            # acceleration a, lean atan(a / g) of 17 to 39 degrees): at speed
+            # v and wavelength v * period, a half-width A needs a = A (2 pi / period)^2.
+            trick.carve_period_s = round(float(g.uniform(2.0, 4.0)), 2)
+            lateral = float(g.uniform(3.0, 8.0))
+            half = lateral * (trick.carve_period_s / (2 * np.pi)) ** 2
+            trick.carve_m = round(min(3.5, half), 2) if g.uniform() < 0.7 else 0.0
+            trick.jitter_deg = round(float(g.uniform(0.5, 3.0)), 2)
+        _solve_or_redraw(trick, r)
+        tricks.append(trick)
+    return tricks
+
+
+def _solve_or_redraw(trick: Trick, rng: np.random.Generator, tries: int = 6) -> None:
+    """``solve_tilt``, redrawing the air time if no lean works for this one."""
+    for attempt in range(tries):
+        try:
+            solve_tilt(trick)
+            return
+        except ValueError:
+            if attempt == tries - 1:
+                raise
+            trick.air_s = round(float(rng.uniform(2.4, 3.3)), 2)
+            trick.tilt_azimuth_deg = round(float(rng.uniform(0, 360)), 1)
