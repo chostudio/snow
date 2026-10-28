@@ -1,9 +1,10 @@
 # Training the models
 
-> **Status: planned, not built.** Nothing in this document exists in the repo
-> yet. The pipeline today is entirely geometric: it *measures* rotation, it
-> does not *classify* tricks. This is the design for the learned half, written
-> to be reviewed before anything is implemented.
+> **Status: partly built.** Model B, the trick classifier, exists as
+> `snow classify` and is trained and scored on synthetic renders only; see
+> [classifier.md](classifier.md) for what it measured (sense and stance work;
+> spin and axis do not beat the geometry). The segmenter (A) and the judge (C)
+> are still design. The pipeline's own numbers stay geometric.
 
 The companion to the two diagrams in the [README](../README.md): those show
 how a clip is processed, this shows how the models in step 4 and step 6 would
@@ -195,12 +196,17 @@ quantities. Feed those.
 
 ### Mirroring flips the label
 
-Horizontal mirror is the obvious augmentation and it is a trap: mirroring a
-frontside rotation makes it backside, and regular stance switch. If you mirror
-the pose without flipping the direction label, you teach the model that
-direction does not matter, and direction is half the trick name.
+Horizontal mirror is the obvious augmentation and it is a trap: mirroring
+reverses the turn's sense (clockwise becomes counter-clockwise) and switches
+the stance (regular becomes goofy). If you mirror the pose without flipping
+those labels, you teach the model that the sense does not matter.
 
-Mirror freely, but flip the label with it.
+Correction, found while building the classifier: frontside/backside itself
+**survives** a mirror, because it is the product of sense and stance and both
+flip. So the classifier predicts sense and stance and composes
+frontside/backside from them ([classifier.md](classifier.md)).
+
+Mirror freely, but flip the sense and stance labels with it.
 
 ### Never window across a camera cut
 
