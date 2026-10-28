@@ -36,7 +36,7 @@ def _exporter():
     return module
 
 
-def air_events(name: str) -> list[dict]:
+def air_events(name: str, detector: str = "auto") -> list[dict]:
     """Exactly what the dashboard would show as air events for ``name``.
 
     Mirrors ``export_session.main`` up to ``find_events`` without writing a
@@ -60,7 +60,7 @@ def air_events(name: str) -> list[dict]:
             r.update(feats[r["f"]])
         es.rebase_segments(recs)
     es.compute_rates(recs, real_fps)
-    return es.find_events(recs, real_fps, clip.fps)
+    return es.find_events(recs, real_fps, clip.fps, detector)
 
 
 def _over(name: str, column: str, start: int, end: int) -> float | None:

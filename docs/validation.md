@@ -415,12 +415,22 @@ produced no air event, so dashboard columns count 18.
 | synth20_double_cork_1440 | oracle | 1440 | 1114 | 1097 | +745 | 1080 | cou / cou | 35 / 43 | 72 / 72 | 326 / 299 |
 | synth20_double_cork_1440 | pipeline | 1440 | 1114 | 430 | +237 | 360 | cou / cou | 35 / 31 | 72 / 160 | 326 / 124 |
 
+## The airborne segmenter
+
+**Real footage: not proven.** Measured on synthetic renders only
+([segmenter.md](segmenter.md)). On the two real clips it calls most
+frames airborne, including a rider standing at the top of a halfpipe, so its
+real accuracy is not just unmeasured but suspect. No real clip has
+hand-labelled takeoff and landing frames yet.
+
 ## Claims you may not make
 
 - that a spin count is correct in absolute terms
 - that any length in metres is a real-world measurement
 - that a rate is real-time unless `slowmo_factor` was actually set
 - that rotation across a camera cut was measured — it was not, by design
+- that the segmenter finds airs on real footage, or any synthetic segmenter
+  score as a real one
 - that a corked trick's spin count is right through the pipeline: the
   measure names corks correctly on exact poses; through the pipeline, with
   the tracker and the air detector fixed, the dashboard named 7 of 13

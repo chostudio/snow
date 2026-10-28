@@ -1,9 +1,10 @@
 # Training the models
 
-> **Status: planned, not built.** Nothing in this document exists in the repo
-> yet. The pipeline today is entirely geometric: it *measures* rotation, it
-> does not *classify* tricks. This is the design for the learned half, written
-> to be reviewed before anything is implemented.
+> **Status: model A is built** as `snow segmenter` (`src/snow/learn/`), see
+> [segmenter.md](segmenter.md): trained and measured on synthetic clips only,
+> unmeasured on real footage, and opt-in. Models B and C are planned, not
+> built: the pipeline otherwise *measures* rotation, it does not *classify*
+> tricks.
 
 The companion to the two diagrams in the [README](../README.md): those show
 how a clip is processed, this shows how the models in step 4 and step 6 would

@@ -58,6 +58,14 @@ trick:
     Angle between the rider's own up axis and the world vertical: 0 upright,
     180 fully inverted. This is what separates a cork from a flat spin.
 
+``airborne_hint``, ``airborne_prob``
+    Per frame, is the rider in the air. With trained segmenter weights (see
+    ``segmenter_weights`` and docs/segmenter.md) this is the learned model's
+    mask and ``airborne_prob`` its probability; without them it falls back
+    to the old placeholder, under the clip's median ``grab_distance``, which
+    calls about half of every clip airborne by construction, and
+    ``airborne_prob`` is empty. ``df.attrs["airborne_source"]`` says which.
+
 Rates use real time, so a slow-motion clip must carry its ``slowmo_factor``
 (see ``meta.py``) or every deg/s will be wrong by that factor.
 """
@@ -65,6 +73,7 @@ Rates use real time, so a slow-motion clip must carry its ``slowmo_factor``
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 
 import numpy as np
@@ -189,6 +198,50 @@ def _signed_path(path: np.ndarray, steps: list[tuple[int, np.ndarray]],
     return out
 
 
+def segmenter_weights(choice: str | Path | None = "auto") -> Path | None:
+    """Which segmenter weights to use, or None for the heuristic.
+
+    ``"auto"`` takes ``$SNOW_SEGMENTER`` or ``data/weights/segmenter.pt`` when
+    the file exists; ``"off"`` (or None) never uses a model; anything else is
+    a path that must exist. Weights are not committed (``*.pt`` is ignored);
+    they live in S3, see docs/segmenter.md.
+    """
+    if choice is None or str(choice) in ("off", "none", "heuristic"):
+        return None
+    if str(choice) == "auto":
+        from .config import WEIGHTS_DIR
+
+        env = os.environ.get("SNOW_SEGMENTER")
+        path = Path(env) if env else WEIGHTS_DIR / "segmenter.pt"
+        return path if path.exists() else None
+    path = Path(choice)
+    if not path.exists():
+        raise FileNotFoundError(f"segmenter weights not found: {path}")
+    return path
+
+
+def _heuristic_airborne(df: pd.DataFrame) -> None:
+    df["airborne_hint"] = df["grab_distance"] < df["grab_distance"].median()
+    df["airborne_prob"] = np.nan
+    df.attrs["airborne_source"] = "heuristic"
+
+
+def _segmenter_airborne(df: pd.DataFrame, detections: dict[int, list[dict]],
+                        camera: CameraTrack | None, tracking_id: int, weights: Path) -> None:
+    # Imported here: torch is heavy, and a clip without weights never needs it.
+    from .learn.inputs import frame_channels
+    from .learn.segmenter import Segmenter
+
+    model = Segmenter.load(weights)
+    x = frame_channels(detections, df, camera.rotations if camera is not None else None,
+                       tracking_id=tracking_id)
+    segment = df["segment"].to_numpy(dtype=int)
+    prob = model.probabilities(x, segment)
+    df["airborne_hint"] = model.mask(prob, segment)
+    df["airborne_prob"] = prob
+    df.attrs["airborne_source"] = f"segmenter:{weights.name}"
+
+
 def build(
     poses: Path,
     meta: ClipMeta,
@@ -196,6 +249,7 @@ def build(
     tracking_id: int = 1,
     min_quality: float = 0.35,
     crop_plan: dict | None = None,
+    segmenter: str | Path | None = "off",
 ) -> pd.DataFrame:
     detections = load_poses(poses)
     offsets = (crop_plan or {}).get("principal_offsets")
@@ -338,7 +392,18 @@ def build(
     df["time_s"] = df["frame_id"] * dt
     for column in ("spin_deg", "rotation_deg"):
         df[f"{column[:-4]}_rate_dps"] = df[column].diff() / dt if dt else np.nan
-    df["airborne_hint"] = df["grab_distance"] < df["grab_distance"].median()
+    if "grab_distance" not in df:
+        df["grab_distance"] = np.nan
+    weights = segmenter_weights(segmenter)
+    if weights is None:
+        _heuristic_airborne(df)
+    else:
+        try:
+            _segmenter_airborne(df, detections, camera, tracking_id, weights)
+        except ImportError as exc:
+            # The model needs torch; without it the old heuristic still runs.
+            print(f"  segmenter unavailable ({exc}); using the heuristic airborne_hint")
+            _heuristic_airborne(df)
     df.attrs["spin_axes"] = {k: v.tolist() for k, v in axis_by_segment.items()}
 
     return df.drop(columns=[c for c in ("_frame",) if c in df])
@@ -390,6 +455,11 @@ def summarize(df: pd.DataFrame, meta: ClipMeta) -> dict:
                 ),
             }
         )
+    from .learn.events import runs
+
+    airborne = (df["airborne_hint"].fillna(False).to_numpy(dtype=bool)
+                if "airborne_hint" in df else np.zeros(len(df), dtype=bool))
+    segment_ids = df["segment"].to_numpy(dtype=int) if "segment" in df else None
     return {
         "clip": meta.name,
         "real_fps": meta.real_fps,
@@ -397,4 +467,11 @@ def summarize(df: pd.DataFrame, meta: ClipMeta) -> dict:
         "frames": int(len(df)),
         "tracked_frames": int(df["spin_deg"].notna().sum()),
         "segments": segments,
+        "airborne": {
+            "source": df.attrs.get("airborne_source", "heuristic"),
+            "frames": int(airborne.sum()),
+            # [first airborne frame, first frame back down), as frame ids.
+            "airs": [[int(df["frame_id"].iloc[a]), int(df["frame_id"].iloc[b - 1]) + 1]
+                     for a, b in runs(airborne, segment_ids)],
+        },
     }
