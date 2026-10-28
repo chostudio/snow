@@ -102,7 +102,7 @@ def gold_sources(src: Path) -> list[ClipSource]:
         slowmo = float(row.get("slowmo_factor") or 1.0)
         entry = out.setdefault(clip, ClipSource(
             name=clip, group=(row.get("event") or clip).strip(), takeoff=[], landing=[],
-            slowmo=slowmo, kind="real"))
+            slowmo=slowmo, kind="real", variant="real"))
         if (row.get("air") or "").strip() != "0":
             entry.takeoff.append(int(row["takeoff_frame"]))
             entry.landing.append(int(row["landing_frame"]))

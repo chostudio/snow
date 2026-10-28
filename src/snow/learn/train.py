@@ -181,6 +181,7 @@ def score_clip(clip: dict, masks: dict[str, np.ndarray]) -> dict:
     truth = E.runs(clip["y"], clip["segment"])
     out = {"name": clip["name"], "group": clip["group"], "slowmo": clip["slowmo"],
            "kind": clip.get("kind"), "camera_angle": clip.get("camera_angle"),
+           "variant": clip.get("variant") or "",
            "frames": int(len(clip["y"])), "air_frames": int(clip["y"].sum())}
     for method, mask in masks.items():
         counts = E.frame_counts(mask, clip["y"])
@@ -298,16 +299,20 @@ def evaluate(clips: list[dict], folds: int = 5, arch: str = "tcn", epochs: int =
             "ignore": list(ignore),
             "params": parameter_count(build_model(arch, window=window)),
             "clips": len(clips), "groups": len({c["group"] for c in clips}),
-            "summary": summarise(rows), "per_clip": rows}
+            "summary": summarise(rows),
+            # The same scores per kind of clip, so a mix cannot hide a weak one.
+            "by_variant": {v: summarise([r for r in rows if r["variant"] == v])
+                           for v in sorted({r["variant"] for r in rows})},
+            "per_clip": rows}
 
 
-def report_table(result: dict) -> str:
+def report_table(result: dict, summary: dict | None = None) -> str:
     names = {"segmenter": f"segmenter ({result['arch']})", "hint": "airborne_hint (old)",
              "web": "dashboard detector", "always": "every seen frame (floor)"}
     lines = ["| method | frame F1 (95% CI) | precision | recall | airs found | split | false airs "
              "| takeoff err, median (mean) frames | landing err, median (mean) frames |",
              "|---|---|---|---|---|---|---|---|---|"]
-    for method, s in result["summary"].items():
+    for method, s in (summary or result["summary"]).items():
         lo, hi = s["frame_f1_ci95"]
         lines.append(
             f"| {names[method]} | {s['frame_f1']:.3f} ({lo:.3f} to {hi:.3f}) "
