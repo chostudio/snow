@@ -499,7 +499,7 @@ def cmd_synth(args: argparse.Namespace) -> int:
         steps.pipeline_all(selected, args.spacing)
     if args.step in ("compare", "all"):
         rows = steps.results(selected)
-        for by in ("true_kind", "true_camera_angle"):
+        for by in ("true_set", "true_kind", "true_camera_angle"):
             for variant in ("oracle", "pipeline"):
                 print(f"\n{variant}, by {by.replace('true_', '')}")
                 print(compare.table([r for r in rows if r["variant"] == variant], by))
