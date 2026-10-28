@@ -14,10 +14,17 @@ that actually means "720". Without it this falls back to a DISPLAY SHIM:
 rotation about the rider's own body axis, far less sensitive to a panning
 broadcast camera than root yaw but not a substitute for subtracting the camera.
 ``source.metrics`` says which one is on screen, and the UI badges it.
+
+The coach report in the bundle is a rule-based template unless you ask for
+the real one, which calls Nemotron on NVIDIA's API (``src/snow/coach.py``) so
+the static build has it without ``snow serve``:
+
+    ../.venv/bin/python tools/export_session.py run1 --coach nemotron
 """
 
 from __future__ import annotations
 
+import argparse
 import json
 import shutil
 import subprocess
@@ -411,11 +418,12 @@ def find_events(recs: list[dict], real_fps: float, fps: float) -> list[dict]:
 
 
 def rule_based_coach(events: list[dict], clip: dict, measure: str) -> dict:
-    """A deterministic stand-in for the Nemotron reasoning layer.
+    """The offline fallback for the Nemotron coach (``src/snow/coach.py``).
 
     Every sentence here is a template over a measured number — it is NOT model
-    output, and the UI badges it as such. Replacing it means pointing
-    ``api.fetchCoachReport`` at the real endpoint; the shape is the contract.
+    output, and the UI badges it as such. ``--coach nemotron`` replaces it in
+    the bundle, and ``snow serve`` answers ``POST /<name>/coach`` live; the
+    shape is the contract.
     """
     if not events:
         return {"source": "rule-based", "model": None, "verdict": "No air detected in this clip.",
@@ -483,7 +491,7 @@ def rule_based_coach(events: list[dict], clip: dict, measure: str) -> dict:
     }
 
 
-def main(name: str) -> None:
+def main(name: str, coach: str = "rule-based") -> None:
     poses = REPO / "data" / "poses" / f"{name}.json"
     clip_src = REPO / "data" / "clips" / f"{name}.mp4"
     for p in (poses, clip_src):
@@ -531,7 +539,6 @@ def main(name: str) -> None:
     gaps = [[a + 1, b - 1] for a, b in zip(ids, ids[1:]) if b - a > 1]
 
     out_dir = WEB / "public" / "sessions" / name
-    out_dir.mkdir(parents=True, exist_ok=True)
     bundle = {
         "schema": 1,
         "name": name,
@@ -575,6 +582,18 @@ def main(name: str) -> None:
             for fid, det in detected
         ],
     }
+    if coach == "nemotron":
+        # Fails the export rather than shipping the template under a live badge.
+        from snow import coach as nemotron
+
+        try:
+            bundle["coach"] = nemotron.coach_session(bundle)
+        except nemotron.CoachError as exc:
+            sys.exit(f"coach failed, bundle not written: {exc}")
+        bundle["source"]["coach"] = "nemotron"
+        print(f"  coach: {bundle['coach']['model']}")
+
+    out_dir.mkdir(parents=True, exist_ok=True)
     (out_dir / "session.json").write_text(json.dumps(bundle, separators=(",", ":")))
     shutil.copy2(clip_src, out_dir / "clip.mp4")
 
@@ -602,4 +621,9 @@ def main(name: str) -> None:
 
 
 if __name__ == "__main__":
-    main(sys.argv[1] if len(sys.argv) > 1 else "run1")
+    parser = argparse.ArgumentParser(description="Build a dashboard bundle for one clip.")
+    parser.add_argument("name", nargs="?", default="run1")
+    parser.add_argument("--coach", choices=["rule-based", "nemotron"], default="rule-based",
+                        help="nemotron precomputes a real coach report (needs NVIDIA_API_KEY)")
+    args = parser.parse_args()
+    main(args.name, args.coach)

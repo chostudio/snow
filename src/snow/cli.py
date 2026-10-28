@@ -1,4 +1,4 @@
-"""Command line entry point: snow ingest | track | pose | run | doctor."""
+"""Command line entry point: snow ingest | track | pose | run | doctor | coach | serve."""
 
 from __future__ import annotations
 
@@ -17,6 +17,7 @@ from . import pose as ps
 from . import scout as sct
 from . import track as trk
 from . import usd as usdx
+from .coach import CoachError
 
 
 def _print_info(info: ing.VideoInfo) -> None:
@@ -506,6 +507,31 @@ def cmd_synth(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_coach(args: argparse.Namespace) -> int:
+    """One Nemotron coaching report over an exported bundle; see docs/coach.md."""
+    from . import coach, serve
+
+    if not (serve.SESSIONS_DIR / args.name / "session.json").exists():
+        print(f"no bundle for {args.name!r}; run web/tools/export_session.py first",
+              file=sys.stderr)
+        return 1
+    session = coach.load_session(serve.SESSIONS_DIR, args.name)
+    try:
+        report = coach.coach_session(session, args.event)
+    except ValueError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    print(json.dumps(report, indent=2, ensure_ascii=False))
+    return 0
+
+
+def cmd_serve(args: argparse.Namespace) -> int:
+    from . import serve
+
+    serve.serve(args.host, args.port)
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="snow",
@@ -679,6 +705,20 @@ def build_parser() -> argparse.ArgumentParser:
                          help="minimum seconds between NIM calls")
     p_synth.set_defaults(func=cmd_synth)
 
+    p_coach = sub.add_parser(
+        "coach", help="ask Nemotron (NVIDIA API) to coach an exported session bundle"
+    )
+    p_coach.add_argument("name")
+    p_coach.add_argument("--event", help="event id to focus on, e.g. air-1")
+    p_coach.set_defaults(func=cmd_coach)
+
+    p_serve = sub.add_parser(
+        "serve", help="serve the dashboard's bundles plus POST /<name>/coach"
+    )
+    p_serve.add_argument("--host", default="127.0.0.1")
+    p_serve.add_argument("--port", type=int, default=8000)
+    p_serve.set_defaults(func=cmd_serve)
+
     return parser
 
 
@@ -686,7 +726,7 @@ def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     try:
         return args.func(args)
-    except (ing.IngestError, trk.TrackError, ps.PoseError, cp.CropError) as exc:
+    except (ing.IngestError, trk.TrackError, ps.PoseError, cp.CropError, CoachError) as exc:
         print(f"\nerror: {exc}", file=sys.stderr)
         return 1
 
