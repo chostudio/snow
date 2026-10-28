@@ -123,8 +123,9 @@ Each is load-bearing and each is explained in the linked doc.
    is `spin_path_deg`: it names 20 of 20 synthetic tricks on exact poses,
    but through the pipeline corks failed, because the tracker dropped the
    inverted rider (the NIM reads them fine when boxed). Stitching and rotated
-   recovery in `track.py` fixed the boxes: the pipeline now names 11 of 20
-   (5 of 13 corks, from 1); the rest are split airs and path misreads.
+   recovery in `track.py` fixed the boxes, and the dashboard's air detector
+   now reads each air's sense once: the pipeline names 13 of 20 (7 of 13
+   corks, from 1); most of the rest over-read a step from pose jitter.
    `axis_spin_deg` undercounts corks by definition; never promote it back.
    → `docs/validation.md`, `docs/rotation.md`, `docs/tracking.md`
 
@@ -149,7 +150,7 @@ git diff --cached | grep -niE "nvapi-|api[_-]key|secret|bearer"
 ```bash
 source .venv/bin/activate
 snow doctor                 # tools, packages, vendored client, endpoint, key
-python -m pytest -q         # 77 tests, ~20s, no network and no GPU
+python -m pytest -q         # 81 tests, ~20s, no network and no GPU
 ```
 
 The venv is pinned to **Python 3.12**: the NVIDIA client supports 3.10–3.12
@@ -166,7 +167,7 @@ TypeScript and must stay console-clean.
 ### Testing
 
 Tests are fast, hermetic and run without the NIM. The suite is the real
-specification for six things:
+specification for eight things:
 
 - `tests/test_bbox_format.py` — parses our annotation with **NVIDIA's own
   reader**, not a reimplementation of it.
@@ -183,6 +184,9 @@ specification for six things:
 - `tests/test_track_recovery.py` — rotated boxes map back exactly; stitching
   joins the rider's fragments but not a bystander or across a cut; a
   recovery chain that wanders onto a spectator is dropped whole.
+- `tests/test_air_events.py` — the dashboard's air detector keeps one trick
+  one air across a pose hole, a few flip frames and a stretch read
+  backwards, and leaves a wind-up out of it.
 - `tests/test_synth.py` — synthetic tricks really have the inversions their
   names claim, labels are measured from motion, and ground truth in the NIM's
   schema obeys the same forward kinematics as the NIM's own output.

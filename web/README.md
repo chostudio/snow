@@ -63,6 +63,11 @@ Air detection gates on a fraction of the clip's **own** peak rotation rate, not
 an absolute RPM, because conformed slow motion scales every real-world rate by
 a factor the file does not record. An absolute gate clipped a continuous 600°
 slow-motion air down to the 142° sliver that happened to exceed it.
+The air is found on the unsigned rotation rate and followed across pose holes
+of up to 20 frames; its sense is read once per air from net vertical yaw, and
+a turn the other way at either end (a wind-up) is trimmed off. Reading the
+sense frame by frame split synthetic corks wherever the pipeline read a
+stretch backwards ([../docs/validation.md](../docs/validation.md)).
 The report labels the one length that is camera-relative rather than quietly
 printing it as a pop height.
 

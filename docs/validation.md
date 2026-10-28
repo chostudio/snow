@@ -267,6 +267,66 @@ boxes masked (synth14: path 1024 -> 381 degrees, 95th-percentile step 8.6
 dominant axis (finding 6 produces such segments); fixed in `cli.py`, no
 effect on any number.
 
+### Fixed after this table: split airs, and the short paths were a sign
+
+The "short path" on synth16 and synth17 was not short. Over the true air
+the unsigned path read 1157 and 989 degrees for two 1080s; the signed path
+read 102 and 430 because its sense, read over about 15 frames either side,
+went backwards for 50-60 frames while the rider was inverted, and those
+frames were subtracted. Re-running `features` on the same poses separates
+two causes:
+
+| | estimated camera | true camera | no camera |
+|---|---|---|---|
+| synth16 (-1080) | +102 | **-1137** | -1035 |
+| synth20 (+1440) | +1046 | **+1379** | +1412 |
+| synth17 (+1080) | +430 | +408 | +407 |
+
+On synth16 and synth20 it is `camera.py`: inverted, the vertical part of a
+cork's turn is small, and the camera estimate's error outweighs it. On
+synth17 it is the pose: wrong with the true camera too, as a pose mirrored
+in depth would be, since that reverses the turn about the vertical. Reading
+the sense only while the rider is near upright fixed these and broke a flat
+spin (the NIM's tilt is too noisy to gate on), and widening the window to
+about 3 s fixed them but would mix neighbouring halfpipe hits.
+
+What is known to turn one way is one air, so the dashboard's detector
+(`web/tools/export_session.py`) now:
+
+- finds and grows the air on the **unsigned** path rate, so a stretch read
+  backwards no longer ends it;
+- follows it across pose holes up to 20 frames inside a shot (the tracker
+  still loses the inverted rider for 10-18 frames on synth09 and synth20);
+- scales its gates by the 95th-percentile rate, not the 99th: on synth18 a
+  few pose-flip frames at 140-190 rpm set the 99th and gated out the spin;
+- takes each air's sense once, from its net vertical yaw (right on 20 of
+  20 airs where the signed path was right on 19), and its size from the
+  unsigned path;
+- trims a stretch at either end only when the signed path and the yaw both
+  turn against the air: a wind-up, not the trick.
+
+Same poses, no NIM calls:
+
+| pipeline | before | after |
+|---|---|---|
+| dashboard spin right | 11/20 | **13/20** |
+| dashboard direction right | 19/20 | **20/20** |
+| takeoff / landing, frames | 17 / 28 | **12 / 15** |
+
+No air is split any more. Six of the seven misses are over-reads (synth04,
+08, 12, 14, 15 as one step up; synth18, two pose flips of about 180 degrees
+each, as 1620). The path over-reads by a median 9% of even jitter, not
+spikes: capping each step at 2-4x its neighbours' median names 13 either
+way. Smoothing the body orientation is the next fix. The seventh, synth17,
+reads 720: its first 40 air frames have no pose and the mirrored stretch is
+trimmed as a wind-up, which nothing here can tell it from.
+
+On the real clips: the main air of the *"Frontside Double Cork 1080"* clip
+had 170 degrees of opposite turn before it; with the trim it reads -1018
+(named 1080; it read -998). Run1's long air reads +1013 (was +940). Run1's
+small air at 357-380 changed sign, +226 to -228: its yaw and signed path
+disagree and which is right is unknown.
+
 ### Pipeline, by trick
 
 | kind | n | axis spin vs named | axis spin vs exact | vertical yaw vs named | dashboard spin right | yaw sense right | dashboard direction right | axis tilt | max tilt | camera rotation | takeoff (frames) | landing (frames) |
@@ -363,8 +423,8 @@ produced no air event, so dashboard columns count 18.
 - that rotation across a camera cut was measured — it was not, by design
 - that a corked trick's spin count is right through the pipeline: the
   measure names corks correctly on exact poses; through the pipeline, with
-  the tracker fixed, the dashboard named 5 of 13 synthetic corks (it was 1).
-  The rest are split airs and path over- and under-reads, not missing boxes
+  the tracker and the air detector fixed, the dashboard named 7 of 13
+  synthetic corks (it was 1). The rest over-read by a step from pose jitter
 - that `axis_spin_deg` is a spin count: it undercounts corks even on exact
   poses; `spin_path_deg` is the count
 - that the camera turned by `camera_rotation_deg`: its magnitude assumes a
