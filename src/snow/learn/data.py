@@ -84,9 +84,10 @@ def _first(record: dict, *keys: str):
 def discover(synth_dir: Path | None = None, manifest: Path | None = None) -> list[ClipSource]:
     """Every labelled synthetic clip, with its group from the manifest when given.
 
-    The manifest is JSON Lines with at least the clip name; the group is read
-    from ``group``, ``split_group`` or ``event``, and a fixed ``split`` is
-    honoured when present. Clips in ``synth_dir`` that the manifest does not
+    The manifest is JSON Lines with at least the clip name (``snow synth``'s
+    ``MANIFEST.scale.jsonl``); the group is read from ``group``,
+    ``split_group`` or ``event``, a fixed ``split`` is honoured when present,
+    and a clip whose ``status`` is not ``done`` is skipped. Clips in ``synth_dir`` that the manifest does not
     mention keep their own name as group.
     """
     synth_dir = synth_dir or cfg.DATA_DIR / "synth"
@@ -102,6 +103,8 @@ def discover(synth_dir: Path | None = None, manifest: Path | None = None) -> lis
     for labels in sorted(synth_dir.glob("*/labels.json")):
         clip_dir = labels.parent
         record = meta.get(clip_dir.name, {})
+        if record.get("status", "done") != "done":
+            continue  # the scaling run says this clip's pipeline output is incomplete
         group = _first(record, "group", "split_group", "event")
         split = _first(record, "split")
         out.append(from_synth_labels(clip_dir, str(group) if group else None,
