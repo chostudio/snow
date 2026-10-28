@@ -389,7 +389,8 @@ def cmd_features(args: argparse.Namespace) -> int:
         print("  crop plan ignored: these poses came from the full frame")
 
     df = feat.build(poses, clip, camera=track, tracking_id=args.track_id,
-                    min_quality=args.min_quality, crop_plan=crop_plan)
+                    min_quality=args.min_quality, crop_plan=crop_plan,
+                    segmenter=getattr(args, "segmenter", "auto"))
     csv = cfg.POSES_DIR / f"{args.name}.features.csv"
     parquet = cfg.POSES_DIR / f"{args.name}.features.parquet"
     df.to_csv(csv, index=False)
@@ -401,6 +402,8 @@ def cmd_features(args: argparse.Namespace) -> int:
 
     summary = feat.summarize(df, clip)
     print(f"\n{summary['tracked_frames']}/{summary['frames']} frames with a body frame")
+    air = summary["airborne"]
+    print(f"  airborne: {air['frames']} frames in {len(air['airs'])} air(s), from {air['source']}")
     print(f"  real fps {summary['real_fps']:.1f} (slow motion {summary['slowmo_factor']}x)")
     for seg in summary["segments"]:
         # A segment too short to have a dominant axis reports its tilt as None.
@@ -628,6 +631,10 @@ def build_parser() -> argparse.ArgumentParser:
                         help="skip camera compensation (rotations stay in "
                              "camera coordinates and will be wrong)")
     p_feat.add_argument("--recompute-camera", action="store_true")
+    p_feat.add_argument("--segmenter", default="auto",
+                        help="airborne model weights: auto (data/weights/segmenter.pt "
+                             "or $SNOW_SEGMENTER if present), off (the old heuristic), "
+                             "or a path")
     p_feat.set_defaults(func=cmd_features)
 
     p_usd = sub.add_parser("usd", help="export a USD skeletal animation for Omniverse")
@@ -678,6 +685,13 @@ def build_parser() -> argparse.ArgumentParser:
     p_synth.add_argument("--spacing", type=float, default=120.0,
                          help="minimum seconds between NIM calls")
     p_synth.set_defaults(func=cmd_synth)
+
+    from .learn import cli as learn_cli
+
+    p_seg = sub.add_parser(
+        "segmenter", help="airborne segmenter: build dataset, evaluate, train, label template"
+    )
+    learn_cli.build_parser(p_seg)
 
     return parser
 

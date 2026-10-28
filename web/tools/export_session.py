@@ -160,6 +160,8 @@ def load_features(name: str) -> tuple[dict[int, dict], str, str] | None:
         spin = row.get("spin_deg")
         yaw = float(spin) if spin is not None and spin == spin else yaw
         path = row.get("rotation_deg")
+        prob = row.get("airborne_prob")
+        learned = prob is not None and prob == prob  # NaN-safe
         out[int(row["frame_id"])] = {
             # Cumulative WITHIN a camera segment: it restarts at every cut.
             "segment_rotation": float(row[column]),
@@ -170,6 +172,9 @@ def load_features(name: str) -> tuple[dict[int, dict], str, str] | None:
             "segment": int(row.get("segment", 0) or 0),
             "axis_tilt": float(tilt) if tilt == tilt else 0.0,
             "camera_cum": camera_cum,
+            # The learned segmenter's call, when `snow features` ran with
+            # weights (docs/segmenter.md); absent, the rate detector decides.
+            **({"airborne": bool(row.get("airborne_hint"))} if learned else {}),
         }
     return out, column, label
 
@@ -314,9 +319,35 @@ def _trim_counter_turn(recs: list[dict], lo: int, hi: int, sense: float) -> tupl
     return lo, hi
 
 
-def find_events(recs: list[dict], real_fps: float, fps: float) -> list[dict]:
+def segmenter_spans(recs: list[dict]) -> list[list[int]]:
+    """Airs as the learned segmenter marked them: runs of airborne frames.
+
+    A run continues across a hole in the pose track inside one shot, exactly
+    as the rate detector's growth does (``adjacent``), and never across a cut.
+    """
+    spans: list[list[int]] = []
+    for i, r in enumerate(recs):
+        if not r.get("airborne"):
+            continue
+        if spans and spans[-1][1] == i - 1 and adjacent(recs, i - 1, i):
+            spans[-1][1] = i
+        else:
+            spans.append([i, i])
+    return spans
+
+
+def find_events(recs: list[dict], real_fps: float, fps: float,
+                detector: str = "auto") -> list[dict]:
+    """Air events. ``detector``: "rate" (hysteresis on rotation rate),
+    "segmenter" (the learned model's frames, see docs/segmenter.md), or
+    "auto", the segmenter when `snow features` wrote its output."""
     if not recs:
         return []
+    learned = all("airborne" in r for r in recs)
+    if detector == "segmenter" and not learned:
+        raise ValueError("no segmenter output in the features table; run `snow features` "
+                         "with weights, or use the rate detector")
+    use_segmenter = detector == "segmenter" or (detector == "auto" and learned)
     by_f = {r["f"]: r for r in recs}
     speeds = [r["speed"] for r in recs]
     peak = float(np.percentile(speeds, PEAK_PERCENTILE))
@@ -341,8 +372,8 @@ def find_events(recs: list[dict], real_fps: float, fps: float) -> list[dict]:
     # the unsigned path, not the turn's sense: through the pipeline the sense
     # of a corked spin can read backwards for a stretch, and stopping there
     # split one air into two.
-    spans: list[list[int]] = []
-    for a, b in cores:
+    spans: list[list[int]] = [] if not use_segmenter else segmenter_spans(recs)
+    for a, b in ([] if use_segmenter else cores):
         while a > 0 and adjacent(recs, a - 1, a) and recs[a - 1]["speed"] >= leave:
             a -= 1
         while b < len(recs) - 1 and adjacent(recs, b, b + 1) and recs[b + 1]["speed"] >= leave:
@@ -355,7 +386,11 @@ def find_events(recs: list[dict], real_fps: float, fps: float) -> list[dict]:
     events = []
     for lo, hi in spans:
         sense = _sense(recs[lo:hi + 1])
-        lo, hi = _trim_counter_turn(recs, lo, hi, sense)
+        if not use_segmenter:
+            # The segmenter was trained on true takeoffs, so a wind-up is
+            # already outside its air; only the rate detector's growth needs
+            # trimming back.
+            lo, hi = _trim_counter_turn(recs, lo, hi, sense)
         inside = recs[lo:hi + 1]
         start, end = inside[0]["f"], inside[-1]["f"]
         if len(inside) < MIN_AIR_FRAMES:
@@ -483,7 +518,7 @@ def rule_based_coach(events: list[dict], clip: dict, measure: str) -> dict:
     }
 
 
-def main(name: str) -> None:
+def main(name: str, detector: str = "auto") -> None:
     poses = REPO / "data" / "poses" / f"{name}.json"
     clip_src = REPO / "data" / "clips" / f"{name}.mp4"
     for p in (poses, clip_src):
@@ -525,7 +560,9 @@ def main(name: str) -> None:
         print(f"  rotation from {column} ({rotation_measure})")
 
     compute_rates(recs, clip["real_fps"])
-    events = find_events(recs, clip["real_fps"], clip["fps"])
+    events = find_events(recs, clip["real_fps"], clip["fps"], detector)
+    air_source = ("segmenter" if detector != "rate" and recs and all("airborne" in r for r in recs)
+                  else "rate")
 
     ids = [r["f"] for r in recs]
     gaps = [[a + 1, b - 1] for a, b in zip(ids, ids[1:]) if b - a > 1]
@@ -541,6 +578,7 @@ def main(name: str) -> None:
             "rotation_measure": rotation_measure,
             "coach": "rule-based",
             "pose": "nvidia-body-pose-nim",
+            "air_detector": air_source,
         },
         "skeleton": {"parents": PARENTS, "links": LINKS, "joints": J, "num_joints": len(PARENTS)},
         "gaps": gaps,
@@ -602,4 +640,12 @@ def main(name: str) -> None:
 
 
 if __name__ == "__main__":
-    main(sys.argv[1] if len(sys.argv) > 1 else "run1")
+    import argparse
+
+    parser = argparse.ArgumentParser(description=__doc__.split("\n")[0])
+    parser.add_argument("name", nargs="?", default="run1")
+    parser.add_argument("--air", choices=["auto", "rate", "segmenter"], default="auto",
+                        help="air detector: the learned segmenter when `snow features` "
+                             "wrote its output (auto), or the rate hysteresis")
+    cli = parser.parse_args()
+    main(cli.name, cli.air)
