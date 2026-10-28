@@ -511,9 +511,8 @@ air event.
    30 under), takeoff error grows from 5 to 67 frames and camera-rotation
    error from 64 to 261 degrees. A slowed clip has k times the frames for the
    same turn, so whatever error accrues per frame (pose jitter in the path,
-   camera jitter) grows k times against an unchanged total. Measured, not
-   yet diagnosed; it is the first thing to look at before trusting a count
-   on broadcast slow motion.
+   camera jitter) grows k times against an unchanged total. Diagnosed and
+   fixed in the next section (held out: 4 of 22 named at 4x became 15).
 4. **Long ground time adds false airs through the pipeline.** The oracle
    finds exactly one air on 281 of 285 clips. Through the pipeline the
    dashboard's detector finds more than one on 49 of 139 `long_ground`
@@ -528,6 +527,182 @@ air event.
 No pipeline run failed on any of the 285 clips, and every clip has an air
 event on the oracle except four.
 
+### Fixed after this table: slow motion and pose jitter
+
+October 2026. Same 285 clips, same poses and camera tracks: no NIM calls,
+no new renders. Everything below is `snow features` and the dashboard's
+detector re-run on files already on disk.
+
+**Split.** The 72 manifest groups were split once, by a fixed seed, before
+any number was looked at: 48 groups (189 clips) for development, 24 groups
+(96 clips) held out. Every choice below was made on the development clips.
+The held-out clips and the 20 validation clips (EEVEE, a different
+renderer) were scored **once**, after the method was frozen, and nothing
+was changed after that.
+
+#### Where the error came from
+
+One component swapped at a time between pipeline and truth, the old
+measure (frame-to-frame path), all 285 clips. Named right of 285; in
+brackets over / under (no air event counts as under); then the median
+signed error of the measured rotation in degrees. "(c) true air" is the
+path over the labelled takeoff to landing instead of the detected air.
+The diagnosis itself used the development clips only; this table was
+computed on all 285 afterwards.
+
+| slow motion | pipeline | (a) true camera | (b) exact pose | (c) true air | oracle |
+|---|---|---|---|---|---|
+| 1x | 50/71 (14/7) +27 | 54/71 (11/6) +18 | 66/71 (3/2) +21 | 51/71 (18/2) +40 | 70/71 (1/0) +7 |
+| 2x | 26/71 (26/19) +46 | 40/71 (13/18) +24 | 52/71 (16/3) +49 | 21/71 (42/8) +99 | 71/71 (0/0) +20 |
+| 3x | 23/71 (27/21) +42 | 33/71 (16/22) +19 | 42/71 (22/7) +50 | 21/71 (47/3) +128 | 66/71 (3/2) +12 |
+| 4x | 17/72 (22/33) +24 | 25/72 (14/33) -23 | 46/72 (19/7) +49 | 19/72 (46/7) +152 | 66/72 (1/5) +2 |
+| **all** | 116/285 (89/80) +32 | 152/285 (54/79) +17 | 206/285 (60/19) +42 | 112/285 (153/20) +96 | 273/285 (5/7) +10 |
+
+| kind | pipeline | (a) true camera | (b) exact pose | (c) true air | oracle |
+|---|---|---|---|---|---|
+| cork | 37/95 (30/28) +29 | 45/95 (21/29) +8 | 65/95 (24/6) +43 | 32/95 (55/8) +99 | 90/95 (4/1) +13 |
+| double_cork | 31/96 (30/35) +15 | 41/96 (26/29) +13 | 69/96 (17/10) +28 | 40/96 (47/9) +86 | 93/96 (1/2) -4 |
+| flat | 48/94 (29/17) +61 | 66/94 (7/21) +24 | 72/94 (19/3) +48 | 40/94 (51/3) +96 | 90/94 (0/4) +14 |
+| **all** | 116/285 (89/80) +32 | 152/285 (54/79) +17 | 206/285 (60/19) +42 | 112/285 (153/20) +96 | 273/285 (5/7) +10 |
+
+| camera | pipeline | (a) true camera | (b) exact pose | (c) true air | oracle |
+|---|---|---|---|---|---|
+| back_quarter | 29/72 (12/31) -47 | 33/72 (12/27) -31 | 58/72 (7/7) +33 | 29/72 (31/12) +78 | 68/72 (2/2) +13 |
+| front_quarter | 27/70 (32/11) +85 | 42/70 (19/9) +41 | 50/70 (15/5) +38 | 21/70 (45/4) +108 | 65/70 (2/3) +7 |
+| low_landing | 28/72 (24/20) +26 | 39/72 (10/23) -0 | 44/72 (24/4) +61 | 33/72 (37/2) +92 | 71/72 (1/0) +9 |
+| side | 32/71 (21/18) +43 | 38/71 (13/20) +26 | 54/71 (14/3) +40 | 29/71 (40/2) +107 | 69/71 (0/2) +15 |
+
+By family the two rows are alike (long ground 58/139, short 58/146; true
+camera 75 and 77; exact pose 99 and 107; true air 56 and 56).
+
+What it says:
+
+1. **The NIM's pose is the largest single cause** (exact pose: 116 to 206),
+   then `camera.py` (true camera: to 152). With both exact and the
+   detector's own air, 273.
+2. **The measure was over-reading, and the air window was hiding it.**
+   Given the true air, the pipeline named *fewer* (112): the path read a
+   median 96 degrees high, 152 at 4x, 153 of 285 over a step. The
+   detector's window was wrong (at 4x its takeoff was off by 67 frames on
+   average, mostly late) and its truncation cancelled part of the over-read by luck,
+   which is why the misses went both ways.
+3. **What grows with slow motion is anything added per frame.** Pose
+   jitter (a few degrees a frame, whatever the rider does) and `camera.py`'s
+   frame-to-frame jitter both enter the path once per frame, and a 4x clip
+   has four times the frames for the same turn. With exact poses but
+   `camera.py`'s camera over the true air the path still read +49 to +64
+   at 2x-4x (+29 at 1x).
+   And the detector's rate, read over five frames, was mostly that jitter on
+   slow motion, so it set the peak the gates scale from and broke airs up.
+
+#### What changed
+
+`snow features` writes the camera-compensated body orientation
+(`body_qx`..`body_qw`), and the dashboard's detector, given those columns:
+
+- reads the turn rate over a chord whose span the clip's own turn sets
+  (`features.robust_speed`; fastest chords about 60 degrees);
+- follows a pose hole for up to four such spans (20 frames at 4x is five
+  real ones);
+- drops the RPM floors, which are real-time thresholds slow motion divides;
+- trims a wind-up only outside the air's fast core (inside it, trimming cut
+  real air on slow motion: 130 named on development against 141 untrimmed;
+  core-limited 140);
+- counts the air with `features.spin_count_deg`: the angular path between
+  orientations about 90 degrees of turn apart, the span found from the
+  count itself, averaged over chord phases. The old frame-to-frame figure
+  is kept beside it as `path_rotation_deg`.
+
+None of it needs the slow-motion factor; knowing it did not help (see
+[rotation.md](rotation.md#counting-a-spin-through-pose-jitter), which also
+lists what was tried and dropped: smoothing, a local quadratic fit, a
+takeoff/landing parity constraint, correcting front/back flips, merging
+split airs).
+
+#### Result
+
+Held out (96 clips, 24 groups, scored once). Named right, (over / under),
+median signed error in degrees:
+
+| slow motion | n | pipeline, before | pipeline, after | oracle, before | oracle, after |
+|---|---|---|---|---|---|
+| 1x | 23 | 17 (2/4) -10 | 17 (2/4) -37 | 23 (0/0) +8 | 23 (0/0) -3 |
+| 2x | 26 | 10 (10/6) +73 | **19** (2/5) +21 | 26 (0/0) +25 | 26 (0/0) +3 |
+| 3x | 25 | 9 (8/8) +17 | **16** (4/5) +16 | 23 (1/1) +16 | 25 (0/0) +1 |
+| 4x | 22 | 4 (10/8) +88 | **15** (2/5) -6 | 19 (1/2) +11 | 22 (0/0) +1 |
+| **all** | 96 | 40 (30/26) +28 | **67** (10/19) -0 | 91 (2/3) +13 | **96** (0/0) +0 |
+
+| kind | n | pipeline, before | pipeline, after | oracle, before | oracle, after |
+|---|---|---|---|---|---|
+| cork | 32 | 14 (11/7) +33 | **23** (2/7) -17 | 31 (1/0) +12 | 32 (0/0) -5 |
+| double_cork | 31 | 12 (8/11) +15 | **20** (4/7) -5 | 29 (1/1) +17 | 31 (0/0) -0 |
+| flat | 33 | 14 (11/8) +56 | **24** (4/5) +18 | 31 (0/2) +13 | 33 (0/0) +1 |
+
+| family / camera | n | pipeline, before | pipeline, after | oracle, before | oracle, after |
+|---|---|---|---|---|---|
+| long_ground | 44 | 20 (11/13) +13 | 27 (7/10) +2 | 43 (0/1) +15 | 44 (0/0) +2 |
+| short_ground | 52 | 20 (19/13) +36 | 40 (3/9) -0 | 48 (2/2) +11 | 52 (0/0) -0 |
+| back_quarter | 26 | 10 (2/14) -161 | 13 (3/10) -68 | 23 (1/2) +11 | 26 (0/0) -2 |
+| front_quarter | 22 | 13 (7/2) +69 | 20 (1/1) +17 | 21 (0/1) +12 | 22 (0/0) +0 |
+| low_landing | 24 | 8 (10/6) +14 | 18 (1/5) +10 | 23 (1/0) +15 | 24 (0/0) +2 |
+| side | 24 | 9 (11/4) +64 | 16 (5/3) +18 | 24 (0/0) +15 | 24 (0/0) -0 |
+
+The 20 validation clips (EEVEE, scored once): pipeline **13 to 19 of 20**
+(over 6 to 0, under 1 to 1), oracle 20 to 20; corks 4 to 6 of 6, double
+corks 3 to 6 of 7, flat 6 to 7 of 7. The development clips, for
+reference: pipeline 76 to 140 of 189, oracle 182 to 188.
+
+Also on the held-out clips: direction right 87 of 95 airs to 89 of 96; clips
+where the detector found more than one air 21 to 16 (development 59 to 33);
+mean takeoff / landing error 27 / 32 frames to 19 / 23.
+
+The Isaac renders (`synthi*`, 30 clips, another renderer) have ground truth
+but **no pipeline poses** yet, so only the oracle can be scored there: 30 of
+30 before and after. That checks the measure on a third renderer's exact
+skeletons, not perception.
+
+After the fix, swapping one component at a time again (all 285): pipeline
+207, true camera 209, true air 219, exact pose **272**, oracle 284. The
+camera and the window now barely matter; **what is left is the NIM's pose**.
+
+#### Real clips (no ground truth; readings only)
+
+| clip | air | before | after |
+|---|---|---|---|
+| `trick` (*"Frontside Double Cork 1080"*) | main | frames 40-259, -1018 (1080) | frames 68-260, **-667 (720)** |
+| | first | (trimmed as a wind-up) | frames 0-65, +215 (180), the opposite sense |
+| `run1` | long | frames 492-579, +1013 (1080) | frames 492-572, +951 (900) |
+| | small, 357-380 | -228 (180) | not detected |
+
+The `trick` reading moved a long way, and the earlier agreement with the
+title does not survive it. Over the **old** window (40-259) the frame-to-frame
+path is 1018 but every jitter-robust reading is far lower: the chord count
+728, a smoothed path 748-828, a local quadratic fit 720-741. Over 20-259
+they read 800-930. So most of the old 1018 was the same per-frame jitter
+the synthetic set measured (frame to frame this pose moves a median 3.5
+degrees, while a 1080 over these 220 frames turns under 5 a frame, so
+jitter is a large share of every step), and the count now
+depends on where the air starts, which on this clip is not known: the
+rider is already past 130 degrees of tilt at frame 66, where the detector
+splits it. The count also cuts corners where the axis moves fast, and a
+real double cork's axis moves more than the synthetic ones' (on exact
+synthetic double corks it reads a median 21 degrees low). Neither reading
+is validated; this one is short of the title, by a step or two.
+
+#### What is not explained or fixed
+
+- **The NIM's pose**, 207 against 272 with exact poses. Two development
+  clips have no pose anywhere in the air (the tracker); 19 have its
+  front/back flip on more than 5% of airborne frames (the pose turns the
+  wrong way for a few frames each time the rider faces the camera; 1.4% of
+  all airborne frames). The rest is ordinary jitter and the occasional
+  hole.
+- **Misses now lean under**: 53 under against 25 over across the 285.
+  Double corks are the weakest (61 of 96), partly the chord cutting corners
+  where the axis moves.
+- **1x did not improve on the held-out clips** (17 of 23 both ways; on
+  development 33 to 40 of 48).
+
 ## Claims you may not make
 
 - that a spin count is correct in absolute terms
@@ -538,10 +713,15 @@ event on the oracle except four.
   score as a real one
 - that a corked trick's spin count is right through the pipeline: the
   measure names corks correctly on exact poses; through the pipeline, with
-  the tracker and the air detector fixed, the dashboard named 7 of 13
-  synthetic corks (it was 1). The rest over-read by a step from pose jitter
+  the jitter-robust count, the dashboard names 43 of 63 held-out synthetic
+  corks and double corks (it named 26), and the rest now mostly read a step
+  short. On the real clip titled as a double cork 1080 it reads 720
+- that slow motion no longer costs accuracy: the count no longer needs the
+  factor, and held out it named 15 of 22 at 4x (from 4), but 2x-4x together
+  name 50 of 73 against 17 of 23 at real time, on synthetic renders only
 - that `axis_spin_deg` is a spin count: it undercounts corks even on exact
-  poses; `spin_path_deg` is the count
+  poses; `spin_count_deg` over the air is the count (`spin_path_deg`, the
+  frame-to-frame path, over-reads by the pose's jitter)
 - that the camera turned by `camera_rotation_deg`: its magnitude assumes a
   focal a broadcast long lens can exceed tenfold
 

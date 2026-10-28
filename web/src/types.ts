@@ -25,6 +25,8 @@ export interface ClipInfo {
 export interface EventMetrics {
   rotation_deg: number
   nearest_spin_deg: number
+  /** Frame-to-frame angular path over the same air: the old count, kept for comparison. */
+  path_rotation_deg?: number
   direction: string
   peak_rpm: number
   air_time_s: number

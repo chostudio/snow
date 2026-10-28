@@ -33,7 +33,7 @@ renamed so its name carries its caveat:
 
 | bundle | the model sees |
 |---|---|
-| `rotation_deg` | `spin_count_deg` (the signed angular path when `snow features` ran) |
+| `rotation_deg` | `spin_count_deg` (`features.spin_count_deg` over the air when `snow features` wrote the body orientation; the signed angular path from an older table) |
 | `nearest_spin_deg` | `nearest_180_deg`, described as a rounding, not a call |
 | `peak_rpm`, `air_time_s`, `rotation_decay_dps2` | `..._clip_timebase`, or `..._real_time` only if `slowmo_factor` was set |
 | `pop_height_m`, `min_tuck_radius_m` | `..._uncalibrated`, no unit |

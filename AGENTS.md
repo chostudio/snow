@@ -144,9 +144,14 @@ Each is load-bearing and each is explained in the linked doc.
    recovery in `track.py` fixed the boxes, and the dashboard's air detector
    now reads each air's sense once: the pipeline names 13 of 20 (7 of 13
    corks, from 1); most of the rest over-read a step from pose jitter. On
-   the 285-clip training set it names only 116 of 281, and 17 of 69 at 4x
-   slow motion: the 20 were a narrow sample.
-   `axis_spin_deg` undercounts corks by definition; never promote it back.
+   the 285-clip training set it named only 116 of 281, and 17 of 69 at 4x
+   slow motion: the 20 were a narrow sample. The cause was a measure that
+   added pose jitter once per frame (slow motion multiplies the frames), so
+   the dashboard now counts each air with `features.spin_count_deg` over
+   the body orientation (`body_q*` columns): held out, 40 to 67 of 96, 4 to
+   15 of 22 at 4x, no slow-motion factor needed. What is left is the NIM's
+   pose. `axis_spin_deg` undercounts corks by definition; never promote it
+   back, and do not count with the frame-to-frame path either.
    → `docs/validation.md`, `docs/rotation.md`, `docs/tracking.md`
 
 ## Secrets

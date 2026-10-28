@@ -79,6 +79,24 @@ def _over(name: str, column: str, start: int, end: int) -> float | None:
     return float(inside[column].iloc[-1] - inside[column].iloc[0])
 
 
+def _count_over(name: str, start: int, end: int) -> float | None:
+    """``features.spin_count_deg`` across frames ``start``..``end``, in one shot."""
+    import pandas as pd
+
+    from ..features import ORIENTATION_COLUMNS, spin_count_deg
+
+    df = pd.read_csv(cfg.POSES_DIR / f"{name}.features.csv")
+    if not all(c in df for c in ORIENTATION_COLUMNS):
+        return None
+    inside = df[(df["frame_id"] >= start) & (df["frame_id"] <= end)].dropna(
+        subset=list(ORIENTATION_COLUMNS))
+    if len(inside) < 2:
+        return None
+    seg = inside.groupby("segment").size().idxmax()
+    inside = inside[inside["segment"] == seg]
+    return spin_count_deg(inside[list(ORIENTATION_COLUMNS)].to_numpy())
+
+
 def measured(name: str, takeoff: int | None = None, landing: int | None = None) -> dict | None:
     summary_path = cfg.POSES_DIR / f"{name}.features.json"
     if not summary_path.exists():
@@ -109,6 +127,9 @@ def measured(name: str, takeoff: int | None = None, landing: int | None = None) 
             value = _over(name, column, takeoff, landing)
             if value is not None:
                 out[f"air_{column}"] = round(value, 1)
+        count = _count_over(name, takeoff, landing)
+        if count is not None:
+            out["air_spin_count_deg"] = round(count, 1)
     if main is not None:
         m = main["metrics"]
         out.update({
@@ -140,6 +161,10 @@ def row(clip: Path, variant: str, name: str) -> dict:
         r["err_air_spin_path"] = round(abs(path) - nominal, 1)
         r["air_spin_path_named_ok"] = int(round(abs(path) / 180.0)) * 180 == nominal
         r["air_spin_path_sense_ok"] = bool(np.sign(path) == labels["spin_sign"])
+    if got.get("air_spin_count_deg") is not None:
+        count = got["air_spin_count_deg"]
+        r["err_air_spin_count"] = round(count - nominal, 1)
+        r["air_spin_count_named_ok"] = int(round(count / 180.0)) * 180 == nominal
     r["vertical_yaw_sense_ok"] = (np.sign(got["vertical_yaw_deg"]) == labels["spin_sign"])
     if got.get("axis_tilt_deg") is not None:
         r["err_axis_tilt"] = round(got["axis_tilt_deg"] - labels["axis_tilt_deg"], 1)
@@ -172,6 +197,8 @@ COLUMNS = [
     ("spin path over air vs named", "err_air_spin_path"),
     ("spin path names it", "air_spin_path_named_ok"),
     ("spin path sense right", "air_spin_path_sense_ok"),
+    ("spin count over air vs named", "err_air_spin_count"),
+    ("spin count names it", "air_spin_count_named_ok"),
     ("dashboard spin right", "event_spin_ok"),
     ("dashboard direction right", "event_direction_ok"),
     ("axis tilt", "err_axis_tilt"),

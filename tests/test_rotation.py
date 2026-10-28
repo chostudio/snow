@@ -244,3 +244,92 @@ def test_principal_point_correction_is_depth_dependent():
     assert np.array_equal(
         F.correct_principal_point(keypoints, (0.0, 0.0), 2000.0), keypoints
     )
+
+
+def _jittered(rotations: list[np.ndarray], jitter_deg: float, seed: int = 0) -> list[np.ndarray]:
+    """Each orientation perturbed by an independent random rotation, as pose
+    noise is: per frame, not accumulating."""
+    rng = np.random.default_rng(seed)
+    out = []
+    for rotation in rotations:
+        axis = rng.normal(size=3)
+        out.append(axis_angle(axis, np.deg2rad(rng.normal(0.0, jitter_deg))) @ rotation)
+    return out
+
+
+def _quaternions(df) -> np.ndarray:
+    return df[list(F.ORIENTATION_COLUMNS)].dropna().to_numpy()
+
+
+def _cork_rotations(total: float, frames: int) -> list[np.ndarray]:
+    up, side = np.array([0.0, -1.0, 0.0]), np.array([1.0, 0.0, 0.0])
+    rotations, current = [np.eye(3)], np.eye(3)
+    for i in range(1, frames):
+        lean = np.pi / 3 * np.sin(np.pi * i / (frames - 1)) ** 2   # 0 -> 60 -> 0 deg
+        axis = np.cos(lean) * up + np.sin(lean) * side
+        current = axis_angle(axis, np.deg2rad(total / (frames - 1))) @ current
+        rotations.append(current)
+    return rotations
+
+
+@pytest.mark.parametrize("slowmo", [1, 4])
+def test_spin_count_ignores_pose_jitter_at_any_slow_motion(tmp_path, slowmo):
+    """The same corked 1080 at real time and at 4x slow motion, with the same
+    per-frame pose noise: the angular path frame to frame grows with the
+    number of frames, the count does not, and needs no slow-motion factor.
+
+    This is the synthetic training set's slow-motion failure
+    (docs/validation.md): k times the frames for the same turn, so k times
+    the jitter summed into ``rotation_deg``.
+    """
+    frames = 90 * slowmo
+    rotations = _jittered(_cork_rotations(1080.0, frames), jitter_deg=4.0)
+    df = F.build(poses_from(tmp_path, rotations), ClipMeta(name="synthetic", fps=30.0, frames=frames))
+    path = df["rotation_deg"].dropna().iloc[-1]
+    count = F.spin_count_deg(_quaternions(df))
+    assert count == pytest.approx(1080.0, abs=60.0)
+    if slowmo == 4:
+        assert path > 1080.0 + 180.0   # the old count would name a 1260 or more
+
+
+def test_spin_count_is_exact_on_clean_motion(tmp_path):
+    """No jitter, any axis motion: the count agrees with the path."""
+    rotations = _cork_rotations(720.0, 181)
+    df = F.build(poses_from(tmp_path, rotations), meta())
+    assert F.spin_count_deg(_quaternions(df)) == pytest.approx(
+        df["rotation_deg"].dropna().iloc[-1], abs=15.0)
+
+
+def test_orientation_columns_are_the_camera_compensated_frame(tmp_path):
+    """The stored quaternion turns with the rider in the world, not in the
+    camera: a rider fixed in a panning camera's view turned in the world."""
+    poses = synthetic_poses(tmp_path, 0.0, np.array([0.0, -1.0, 0.0]), frames=120)
+    step = axis_angle(np.array([0.0, -1.0, 0.0]), np.deg2rad(1.0))
+    rotations, current = [], np.eye(3)
+    for _ in range(120):
+        rotations.append(current.copy())
+        current = step @ current
+    track = CameraTrack(
+        rotations=np.array(rotations), deltas=np.array([step] * 120),
+        segment=np.zeros(120, dtype=int), inliers=np.full(120, 500),
+        reliable=np.ones(120, dtype=bool), focal=2203.0, frames=120,
+    )
+    q = _quaternions(F.build(poses, meta(), camera=track))
+    assert F.chord_angles(q, np.array([0]), np.array([len(q) - 1]))[0] == pytest.approx(119.0, abs=2.0)
+
+
+def test_robust_speed_span_follows_the_turn_not_the_frame_rate():
+    """The chord span is read from the clip itself: a slowed turn gets a
+    longer span, in proportion, without being told the factor."""
+    up = np.array([0.0, -1.0, 0.0])
+
+    def span_for(slowmo: int) -> int:
+        frames = 60 * slowmo
+        rotations = [axis_angle(up, np.deg2rad(720.0) * i / (frames - 1)) for i in range(frames)]
+        from snow.usd import quat_from_matrix
+        q = np.array([quat_from_matrix(r) for r in _jittered(rotations, 2.0)])
+        _, span = F.robust_speed(q, np.arange(frames), np.zeros(frames, dtype=int))
+        return span
+
+    assert span_for(1) <= 3
+    assert span_for(4) >= 3 * span_for(1)

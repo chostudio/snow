@@ -52,7 +52,20 @@ trick:
     its axis moves, and still says which way the rider turned. Over the air
     it named 20 of 20 synthetic tricks on exact skeletons. Like
     ``rotation_deg`` it also accumulates pose jitter, so measure it over the
-    air, not over a whole clip.
+    air, not over a whole clip. Its meaning is unchanged, but it is no longer
+    the dashboard's count: see ``spin_count_deg``.
+
+``body_qx``, ``body_qy``, ``body_qz``, ``body_qw``
+    The rider's camera-compensated body orientation as a quaternion, so the
+    spin can be re-counted over any window. ``spin_count_deg`` does that: the
+    angular path between orientations about 90 degrees of turn apart rather
+    than one frame apart. A frame-to-frame path adds every frame's pose
+    jitter, and slow motion multiplies the frames for the same turn, so
+    through the NIM ``spin_path_deg`` over the true air read a median 96
+    degrees high on 189 synthetic clips and named 74 of them; the count named
+    149 (docs/validation.md). The chord length is set from the turn itself,
+    so no slow-motion factor is needed. ``robust_speed`` is the matching
+    per-frame rate, which the dashboard's air detector reads.
 
 ``tilt_deg``
     Angle between the rider's own up axis and the world vertical: 0 upright,
@@ -81,6 +94,7 @@ import pandas as pd
 
 from .camera import CameraTrack, rotation_angle, rotation_vector
 from .meta import ClipMeta
+from .usd import quat_from_matrix
 
 ROOT = 0
 NECK = 6
@@ -98,6 +112,19 @@ WORLD_UP = np.array([0.0, -1.0, 0.0])
 # ``spin_path_deg``).
 SENSE_WINDOW = 15
 SENSE_MIN_VERTICAL = 0.2
+
+# The rider's camera-compensated orientation, one quaternion (x, y, z, w) per
+# frame, so a spin can be re-counted over any window (see ``spin_count_deg``).
+ORIENTATION_COLUMNS = ("body_qx", "body_qy", "body_qz", "body_qw")
+
+# ``spin_count_deg`` steps between orientations about this many degrees
+# apart; ``robust_speed`` reads its rate over chords whose fastest are about
+# this many. Both are angles, not frame counts or seconds, which is what makes
+# them indifferent to an unknown slow-motion factor (docs/rotation.md).
+COUNT_CHORD_DEG = 90.0
+SPEED_CHORD_DEG = 60.0
+SPEED_PERCENTILE = 95
+MAX_SPAN = 40
 
 
 def correct_principal_point(
@@ -196,6 +223,117 @@ def _signed_path(path: np.ndarray, steps: list[tuple[int, np.ndarray]],
         signed += sense * np.rad2deg(np.linalg.norm(vector))
         out[position] = signed
     return out
+
+
+def chord_angles(q: np.ndarray, i: np.ndarray, j: np.ndarray) -> np.ndarray:
+    """Degrees between orientations ``q[i]`` and ``q[j]`` (unit quaternions)."""
+    dot = np.abs(np.sum(q[i] * q[j], axis=-1))
+    return np.rad2deg(2.0 * np.arccos(np.clip(dot, -1.0, 1.0)))
+
+
+def _mean_span(span: int, rows: int) -> int:
+    return int(max(1, min(span, rows - 1)))
+
+
+def spin_count_deg(q: np.ndarray, chord_deg: float = COUNT_CHORD_DEG,
+                   iterations: int = 4) -> float:
+    """Total rotation over a run of orientations, without counting pose jitter.
+
+    ``q`` is one quaternion per posed frame, in order, inside one shot (a
+    hole in the pose track is crossed by the chord over it). The angular
+    path frame to frame (``rotation_deg``) adds every frame's jitter, and a
+    slowed clip has k times the frames for the same turn, so its path grows
+    with the slow-motion factor while the turn does not. Here the path is
+    taken between orientations ``k`` frames apart, ``k`` chosen so a chord
+    spans about ``chord_deg`` of the turn itself: on a 1x 1080 that is about
+    every frame, on the same trick at 4x every few. A chord well under 180
+    degrees cannot alias, and jitter adds to a chord roughly once rather
+    than once per frame. The count is averaged over the ``k`` possible
+    starting frames, so it does not depend on which frames the chords hit.
+
+    ``k`` comes from the count itself (fixed point from ``k = 1``), so no
+    frame rate or slow-motion factor is needed.
+    """
+    rows = len(q)
+    if rows < 2:
+        return 0.0
+    total = _stride_path(q, 1)
+    span = 1
+    for _ in range(iterations):
+        if total <= 0:
+            break
+        new = _mean_span(round(chord_deg * rows / total), rows)
+        if new == span:
+            break
+        span = new
+        total = _stride_path(q, span)
+    return float(total)
+
+
+def _stride_path(q: np.ndarray, span: int) -> float:
+    """Chord path at stride ``span``, averaged over the ``span`` phases."""
+    rows = len(q)
+    span = _mean_span(span, rows)
+    totals = []
+    for phase in range(span):
+        picks = list(range(phase, rows, span))
+        if picks[0] != 0:
+            picks.insert(0, 0)
+        if picks[-1] != rows - 1:
+            picks.append(rows - 1)
+        picks = np.asarray(picks)
+        totals.append(float(chord_angles(q, picks[:-1], picks[1:]).sum()))
+    return float(np.mean(totals))
+
+
+def chord_speed(q: np.ndarray, frame_ids: np.ndarray, segments: np.ndarray,
+                span: int) -> np.ndarray:
+    """Turn rate per frame, in degrees per frame, read over a chord.
+
+    For each posed frame, the angle between the posed frames about ``span``
+    either side (inside its shot), over the frames between them. Per-frame
+    jitter enters once per chord instead of once per frame.
+    """
+    rows = len(q)
+    out = np.full(rows, np.nan)
+    for n in range(rows):
+        lo = int(np.searchsorted(frame_ids, frame_ids[n] - span))
+        hi = int(np.searchsorted(frame_ids, frame_ids[n] + span, side="right")) - 1
+        while segments[lo] != segments[n]:
+            lo += 1
+        while segments[hi] != segments[n]:
+            hi -= 1
+        if frame_ids[hi] > frame_ids[lo]:
+            out[n] = chord_angles(q, np.array([lo]), np.array([hi]))[0] / (
+                frame_ids[hi] - frame_ids[lo])
+    return out
+
+
+def robust_speed(q: np.ndarray, frame_ids: np.ndarray, segments: np.ndarray,
+                 chord_deg: float = SPEED_CHORD_DEG) -> tuple[np.ndarray, int]:
+    """``chord_speed`` with its span chosen so the fastest chords are about
+    ``chord_deg``: (speed, span).
+
+    The span is set from the clip's own 95th-percentile rate, iterated from
+    one frame, so it is long where the turn is slow per frame (slow motion)
+    and one frame where it is fast. Returns the span too: it is the clip's
+    own unit of time, and the air detector scales its hole tolerance by it.
+    """
+    frame_ids = np.asarray(frame_ids)
+    segments = np.asarray(segments)
+    span = 1
+    speed = chord_speed(q, frame_ids, segments, span)
+    for _ in range(4):
+        finite = speed[np.isfinite(speed)]
+        if not len(finite):
+            break
+        peak = float(np.percentile(finite, SPEED_PERCENTILE))
+        new = int(np.clip(round(chord_deg / (2 * max(peak, 1e-3))), 1, MAX_SPAN))
+        if new == span:
+            break
+        span = new
+        speed = chord_speed(q, frame_ids, segments, span)
+    return speed, span
 
 
 def segmenter_weights(choice: str | Path | None = "auto") -> Path | None:
@@ -316,12 +454,13 @@ def build(
                 "grab_distance": float(grab / scale) if scale else np.nan,
                 "confidence": float(np.mean(conf)),
                 "_frame": world_frame,
+                **dict(zip(ORIENTATION_COLUMNS, quat_from_matrix(world_frame).tolist())),
             }
         )
         records.append(row)
 
     df = pd.DataFrame(records)
-    for column in ("yaw_rad", "spin_quality", "tilt_deg"):
+    for column in ("yaw_rad", "spin_quality", "tilt_deg", *ORIENTATION_COLUMNS):
         if column not in df:
             df[column] = np.nan
 
