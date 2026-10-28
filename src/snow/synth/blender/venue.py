@@ -412,12 +412,53 @@ def camera_truth(cam, frames: int, width: int) -> dict[str, np.ndarray]:
     return {"world_to_camera": rotations, "centre": centres, "focal_px": focal}
 
 
-def render_settings(width: int, height: int, samples: int, out_dir: str) -> None:
+def _cycles_gpu(samples: int) -> None:
+    """Cycles on the GPU (OptiX, else CUDA), denoised, few bounces.
+
+    For headless Linux boxes, where EEVEE has no GPU context and falls back
+    to software GL. Few samples plus the denoiser look close to EEVEE's
+    plain materials; what matters to the NIM is the silhouette and blur.
+    """
     scene = bpy.context.scene
-    try:
-        scene.render.engine = "BLENDER_EEVEE_NEXT"
-    except TypeError:
-        scene.render.engine = "BLENDER_EEVEE"
+    scene.render.engine = "CYCLES"
+    prefs = bpy.context.preferences.addons["cycles"].preferences
+    for kind in ("OPTIX", "CUDA"):
+        try:
+            prefs.compute_device_type = kind
+        except TypeError:
+            continue
+        prefs.get_devices()
+        devices = [d for d in prefs.devices if d.type == kind]
+        if devices:
+            for d in prefs.devices:
+                d.use = d.type == kind
+            scene.cycles.device = "GPU"
+            break
+    scene.cycles.samples = samples
+    scene.cycles.use_adaptive_sampling = True
+    scene.cycles.use_denoising = True
+    # The default denoiser (OpenImageDenoise) runs on the CPU here: 10 s a
+    # frame on a 4-core box, against 0.3 s for OptiX's on the GPU.
+    if scene.cycles.device == "GPU" and prefs.compute_device_type == "OPTIX":
+        scene.cycles.denoiser = "OPTIX"
+    scene.cycles.max_bounces = 4
+    scene.cycles.diffuse_bounces = 2
+    scene.cycles.glossy_bounces = 2
+    scene.cycles.transmission_bounces = 2
+    scene.cycles.transparent_max_bounces = 4
+    scene.render.use_persistent_data = True
+
+
+def render_settings(width: int, height: int, samples: int, out_dir: str,
+                    engine: str = "eevee") -> None:
+    scene = bpy.context.scene
+    if engine == "cycles":
+        _cycles_gpu(samples)
+    else:
+        try:
+            scene.render.engine = "BLENDER_EEVEE_NEXT"
+        except TypeError:
+            scene.render.engine = "BLENDER_EEVEE"
     scene.render.resolution_x = width
     scene.render.resolution_y = height
     scene.render.resolution_percentage = 100

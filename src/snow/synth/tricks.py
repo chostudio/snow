@@ -69,6 +69,12 @@ class Trick:
     tilt_max_deg: float | None = None   # solved, see solve_tilt
     body: dict = field(default_factory=dict)   # MPFB macro values
     camera: dict = field(default_factory=dict)
+    # Split group: clips sharing a rider (body, outfit, board) and a venue
+    # (dressing, sun). Train/test splits must keep a group whole. ``None``
+    # seeds fall back to ``seed``, so the first 20 clips are each their own.
+    group: str = ""
+    rider_seed: int | None = None
+    venue_seed: int | None = None
 
     @property
     def spin_sign(self) -> int:
@@ -378,7 +384,9 @@ def labels(trick: Trick, m: Motion) -> dict:
     axis_spin = float(np.rad2deg((steps @ axis).sum()))
     axis_tilt = float(np.rad2deg(np.arccos(min(1.0, abs(float(axis @ UP))))))
     tilt = tilt_series(m.rotation[m.takeoff_frame:m.landing_frame + 1])
+    held = np.flatnonzero(m.grab > 0.5)
     return {
+        "group": trick.group or trick.name,
         "name": trick.name,
         "spin_nominal_deg": trick.spin_deg,
         "kind": trick.kind,
@@ -399,6 +407,9 @@ def labels(trick: Trick, m: Motion) -> dict:
         "landing_frame": m.landing_frame,
         "air_frames": m.landing_frame - m.takeoff_frame,
         "air_s_real": trick.air_s,
+        # Frames with the hand more than half way onto the board; -1 if none.
+        "grab_start_frame": int(held[0]) if len(held) else -1,
+        "grab_end_frame": int(held[-1]) if len(held) else -1,
         "frames": len(m.t),
         "output_fps": OUTPUT_FPS,
     }
@@ -499,3 +510,117 @@ def plan(seed: int = 0) -> list[Trick]:
         solve_tilt(trick)
         tricks.append(trick)
     return tricks
+
+
+# --- the training set -------------------------------------------------------
+
+# Spins each kind can carry. A cork needs its inversion clear of the landing
+# (180 < spin - 90), a double cork two of them; past 1440 the air times here
+# would need spin rates no rider holds.
+SPINS = {
+    "flat": (180, 360, 540, 720, 900, 1080, 1260, 1440),
+    "cork": (540, 720, 900, 1080, 1260, 1440),
+    "double_cork": (900, 1080, 1260, 1440),
+}
+SLOWMO = (1.0, 2.0, 3.0, 4.0)
+SCALE_PREFIX = "synthb"
+
+
+def _balanced(values, count: int, rng: np.random.Generator) -> list:
+    """``count`` draws covering ``values`` evenly, in shuffled blocks.
+
+    Each run of ``len(values)`` draws is a permutation of ``values``, so any
+    prefix is balanced to within one per value: a set cut short by its
+    budget is still balanced.
+    """
+    out: list = []
+    while len(out) < count:
+        out += [values[i] for i in rng.permutation(len(values))]
+    return out[:count]
+
+
+def scale_plan(count: int, seed: int = 1, start: int = 1, group_size: int = 4,
+               prefix: str = SCALE_PREFIX) -> list[Trick]:
+    """A balanced, randomised training set of ``count`` tricks.
+
+    Balanced across the factored labels the classifier learns: kind (flat,
+    cork, double cork) in thirds and spin evenly within each kind; direction,
+    stance, grab, camera position and slow-motion factor each evenly. Each
+    factor is shuffled on its own, so no two are correlated by construction.
+
+    Clips come in **split groups** of ``group_size``: one rider (body, outfit,
+    board) at one venue (dressing, sun), as one athlete's runs at one event.
+    A group must stay on one side of a train/test split, or a model can learn
+    the rider and the venue instead of the trick.
+
+    Everything else is drawn per clip and wider than ``plan``: air time,
+    takeoff speed, kicker and landing angles, how long the approach and the
+    ride-out last (so every clip has frames on the ground either side of the
+    air), pre-wind, tuck, grab timing, and the camera's placement and framing.
+    Deterministic in ``seed``, and every prefix of the list is balanced, so
+    plan the whole set at once and render it in order. A second call with a
+    new ``start`` grows a set (numbers and groups continue from it) without
+    renaming what exists.
+    """
+    rng = np.random.default_rng(seed * 7919 + start)
+    kinds = _balanced(KINDS, count, rng)
+    spin_queue = {k: _balanced(SPINS[k], kinds.count(k), rng) for k in KINDS}
+    directions = _balanced(("frontside", "backside"), count, rng)
+    stances = _balanced(("regular", "goofy"), count, rng)
+    grabs = _balanced(GRABS, count, rng)
+    angles = _balanced(CAMERA_ANGLES, count, rng)
+    slowmos = _balanced(SLOWMO, count, rng)
+
+    tricks = []
+    for i in range(count):
+        number = start + i
+        g = (number - 1) // group_size
+        group_rng = np.random.default_rng(seed * 100_003 + g)
+        body = body_params(group_rng)
+        rider_seed = int(group_rng.integers(1, 2**31))
+        venue_seed = int(group_rng.integers(1, 2**31))
+        kind = kinds[i]
+        spin = int(spin_queue[kind].pop(0))
+        clip_seed = seed * 1_000_003 + number
+        r = np.random.default_rng(clip_seed)
+        grab_start = float(r.uniform(0.1, 0.55))
+        grab_len = float(r.uniform(0.15, 0.45))
+        # Bigger spins need more air: a 1440 in under 2.5 s is not ridden.
+        air_lo = 2.0 + 0.5 * (spin - 180) / 1260
+        trick = Trick(
+            name=f"{prefix}{number:04d}_{kind}_{spin}",
+            spin_deg=spin, kind=kind, direction=directions[i], stance=stances[i],
+            grab=grabs[i], camera_angle=angles[i], slowmo=float(slowmos[i]),
+            seed=clip_seed,
+            air_s=round(float(r.uniform(air_lo, 3.3)), 2),
+            approach_s=round(float(r.uniform(0.5, 1.3)), 2),
+            rideout_s=round(float(r.uniform(0.5, 1.3)), 2),
+            kicker_deg=round(float(r.uniform(25.0, 31.0)), 1),
+            landing_deg=round(float(r.uniform(29.0, 35.0)), 1),
+            takeoff_speed=round(float(r.uniform(14.5, 17.5)), 2),
+            prewind_deg=round(float(r.uniform(5, 60)), 1),
+            tuck_depth=round(float(r.uniform(0.25, 0.9)), 2),
+            grab_window=(round(grab_start, 2), round(min(0.85, grab_start + grab_len), 2)),
+            tilt_azimuth_deg=round(float(r.uniform(-40, 40) + r.choice([0, 180])), 1),
+            body=body,
+            camera=camera_params(angles[i], r),
+            group=f"{prefix}g{g:03d}",
+            rider_seed=rider_seed,
+            venue_seed=venue_seed,
+        )
+        _solve_or_redraw(trick, r)
+        tricks.append(trick)
+    return tricks
+
+
+def _solve_or_redraw(trick: Trick, rng: np.random.Generator, tries: int = 6) -> None:
+    """``solve_tilt``, redrawing the air time if no lean works for this one."""
+    for attempt in range(tries):
+        try:
+            solve_tilt(trick)
+            return
+        except ValueError:
+            if attempt == tries - 1:
+                raise
+            trick.air_s = round(float(rng.uniform(2.4, 3.3)), 2)
+            trick.tilt_azimuth_deg = round(float(rng.uniform(0, 360)), 1)

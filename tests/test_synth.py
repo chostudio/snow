@@ -201,3 +201,42 @@ def test_true_camera_track_uses_camera_py_conventions():
     for i in range(1, 5):
         # camera.estimate accumulates exactly so: current = delta @ current.
         assert np.allclose(track.rotations[i], track.deltas[i] @ track.rotations[i - 1])
+
+
+def test_scale_plan_is_balanced_grouped_and_real():
+    planned = tricks.scale_plan(12, seed=5, group_size=4)
+    kinds = [t.kind for t in planned]
+    assert {k: kinds.count(k) for k in tricks.KINDS} == {k: 4 for k in tricks.KINDS}
+    assert sorted(t.camera_angle for t in planned) == sorted(tricks.CAMERA_ANGLES * 3)
+    assert [t.direction for t in planned].count("frontside") == 6
+    # A split group is one rider at one venue, and nothing is shared across groups.
+    groups = {}
+    for t in planned:
+        groups.setdefault(t.group, set()).add((t.rider_seed, t.venue_seed, t.body["height"]))
+    assert len(groups) == 3 and all(len(v) == 1 for v in groups.values())
+    assert len({next(iter(v)) for v in groups.values()}) == 3
+    for t in planned:
+        assert t.spin_deg in tricks.SPINS[t.kind]
+        m = tricks.motion(t)
+        labels = tricks.labels(t, m)
+        assert labels["inversions"] == {"flat": 0, "cork": 1, "double_cork": 2}[t.kind]
+        assert labels["group"] == t.group
+        # Ground either side of the air, so the segmenter sees both classes.
+        assert labels["takeoff_frame"] > 0 and labels["frames"] - 1 > labels["landing_frame"]
+        if t.grab == "none":
+            assert labels["grab_start_frame"] == -1
+        else:
+            assert labels["takeoff_frame"] < labels["grab_start_frame"] < labels["landing_frame"]
+    # Extending the set later numbers on; it never renames what exists.
+    more = tricks.scale_plan(2, seed=5, start=13, group_size=4)
+    assert [t.name[:10] for t in more] == ["synthb0013", "synthb0014"]
+    assert more[0].group == "synthbg003"
+
+
+def test_trick_json_round_trips_with_group_seeds():
+    t = tricks.scale_plan(1, seed=2)[0]
+    assert tricks.Trick.from_json(t.to_json()) == t
+    old = ('{"name": "x", "spin_deg": 360, "kind": "flat", "direction": "frontside", '
+           '"stance": "regular", "grab": "none", "camera_angle": "side", "slowmo": 1.0, '
+           '"seed": 0, "grab_window": [0.3, 0.7]}')
+    assert tricks.Trick.from_json(old).rider_seed is None
