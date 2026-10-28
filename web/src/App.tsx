@@ -82,6 +82,7 @@ function Review({
   const [flags, setFlags] = useState<OverlayFlags>({ skeleton: true, box: false, trail: true })
   const [report, setReport] = useState<CoachReport>(session.coach)
   const [coachLoading, setCoachLoading] = useState(false)
+  const [coachError, setCoachError] = useState<string | null>(null)
   const [showReport, setShowReport] = useState(false)
 
   const selected = session.events.find((e) => e.id === selectedId) ?? null
@@ -109,9 +110,11 @@ function Review({
 
   const refreshCoach = useCallback(() => {
     setCoachLoading(true)
+    setCoachError(null)
     api
       .fetchCoachReport(session, selectedId ?? undefined)
       .then(setReport)
+      .catch((e: Error) => setCoachError(e.message))
       .finally(() => setCoachLoading(false))
   }, [session, selectedId])
 
@@ -155,7 +158,7 @@ function Review({
           ))}
         </select>
         <div className="topbar-spacer" />
-        <PipelineBar session={session} />
+        <PipelineBar session={session} report={report} />
         <button className="btn btn-primary" onClick={() => setShowReport(true)} disabled={!selected}>
           Export trick breakdown
         </button>
@@ -261,7 +264,7 @@ function Review({
               {tab === 'coach' && (
                 <CoachPanel
                   session={session} report={report} event={selected}
-                  loading={coachLoading} onRefresh={refreshCoach}
+                  loading={coachLoading} error={coachError} onRefresh={refreshCoach}
                 />
               )}
               {tab === 'tricks' && (

@@ -135,7 +135,10 @@ export default function ReportView({ session, report, event, onBack }: Props) {
         Metric scale comes from an assumed pinhole focal length and is{' '}
         <strong>uncalibrated</strong>: angles and ratios are trustworthy, absolute metres are not.
         Kinematics source: <code>{session.source.metrics}</code>. Reasoning source:{' '}
-        <code>{report.source}</code>.
+        <code>{report.source === 'nemotron' ? `nemotron (${report.model})` : report.source}</code>
+        {report.source === 'nemotron'
+          ? ', reasoning over the measured numbers above, not the video.'
+          : ', a template over the measured numbers, not model output.'}
       </p>
     </div>
   )

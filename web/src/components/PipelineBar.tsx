@@ -1,4 +1,4 @@
-import type { Session } from '../types'
+import type { CoachReport, Session } from '../types'
 
 interface Stage {
   label: string
@@ -7,8 +7,10 @@ interface Stage {
 }
 
 /** Honest provenance, in the header: which stages actually produced what is on
- * screen, and which are still stand-ins. */
-export default function PipelineBar({ session }: { session: Session }) {
+ * screen, and which are still stand-ins. The coach chip follows the report on
+ * screen, not the bundle: it is live only while a Nemotron report is shown. */
+export default function PipelineBar({ session, report }: { session: Session; report: CoachReport }) {
+  const coachLive = report.source === 'nemotron'
   const stages: Stage[] = [
     { label: 'YOLO + ByteTrack', state: 'live', title: 'Local detection and tracking, CPU/MPS' },
     { label: 'Body Pose NIM', state: 'live', title: 'NVIDIA 3D Body Pose NIM on NVCF — 77-joint 3D skeleton' },
@@ -21,9 +23,11 @@ export default function PipelineBar({ session }: { session: Session }) {
           : 'Display shim in tools/export_session.py — body-axis rotation, not camera-compensated',
     },
     {
-      label: 'Nemotron reasoning',
-      state: session.source.coach === 'nemotron' ? 'live' : 'stub',
-      title: 'Deep biomechanical reasoning over the event summary',
+      label: coachLive ? 'Nemotron coach' : 'Coach (template)',
+      state: coachLive ? 'live' : 'stub',
+      title: coachLive
+        ? `${report.model} on the NVIDIA API, reasoning over the measured features only`
+        : 'Rule-based template over measured numbers; run `snow serve` and Re-run analysis for Nemotron',
     },
   ]
   return (

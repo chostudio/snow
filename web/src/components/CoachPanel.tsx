@@ -7,10 +7,11 @@ interface Props {
   report: CoachReport
   event: TrickEvent | null
   loading: boolean
+  error: string | null
   onRefresh: () => void
 }
 
-export default function CoachPanel({ session, report, event, loading, onRefresh }: Props) {
+export default function CoachPanel({ session, report, event, loading, error, onRefresh }: Props) {
   const live = report.source === 'nemotron'
   return (
     <div>
@@ -67,12 +68,23 @@ export default function CoachPanel({ session, report, event, loading, onRefresh 
           {loading ? 'Asking…' : 'Re-run analysis'}
         </button>
       </div>
-      {!live && (
+      {error && (
+        <p className="note" role="alert" style={{ marginTop: 10, color: 'var(--critical)' }}>
+          <strong>Coach failed:</strong> {error}
+        </p>
+      )}
+      {live ? (
+        <p className="note" style={{ marginTop: 10 }}>
+          Model output over the measured numbers only; it has not seen the video. It was told the spin count
+          is unvalidated, lengths are uncalibrated and rates are in the clip's own timebase unless a
+          slow-motion factor was set, and the report was checked against the schema before it was shown.
+        </p>
+      ) : (
         <p className="note" style={{ marginTop: 10 }}>
           Every sentence above is a template over a measured number, not model output.{' '}
-          <strong>Re-run analysis</strong> posts the event's kinematics to{' '}
-          <code style={{ fontFamily: 'var(--mono)' }}>POST /{session.name}/coach</code> and renders whatever the
-          reasoning layer returns in this same shape.
+          <strong>Re-run analysis</strong> posts the event to{' '}
+          <code style={{ fontFamily: 'var(--mono)' }}>POST /{session.name}/coach</code>; with{' '}
+          <code style={{ fontFamily: 'var(--mono)' }}>snow serve</code> behind it, Nemotron answers.
         </p>
       )}
     </div>
