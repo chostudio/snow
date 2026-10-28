@@ -155,6 +155,9 @@ def test_split_is_by_group_and_deterministic():
     splits = {ds.split_of(f"g{i}") for i in range(200)}
     assert splits == {"train", "val", "test"}
     assert ds._group_and_split("synth01", None) == ("synth01", "original")
+    few = ds.assign_splits([f"g{i}" for i in range(8)])
+    assert sorted(set(few.values())) == ["test", "train", "val"]
+    assert ds.assign_splits(["b", "a", "c", "a"]) == ds.assign_splits(["c", "b", "a"])
     group, split = ds._group_and_split("x", {"split_group": "g1", "split": "test"})
     assert (group, split) == ("g1", "test")
 

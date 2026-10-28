@@ -219,13 +219,18 @@ def encode(track: Track, start: int, end: int, length: int = SEQ_LEN,
 
 
 def augment(track: Track, start: int, end: int, rng: np.random.Generator,
-            jitter: tuple[float, float] = (-0.1, 0.3), camera_gain: tuple[float, float] = (0.5, 2.0)
+            jitter: tuple[float, float] = (-0.05, 0.1),
+            camera_gain: tuple[float, float] = (0.7, 1.4)
             ) -> tuple[np.ndarray | None, bool]:
     """A randomised encoding of one air. Returns (array, mirrored).
 
     * Boundaries move by a fraction of the air: ``jitter`` is how far each end
       may move *inward* (negative is outward), since an air detector usually
-      cuts an air short (docs/validation.md: takeoff 12 frames late).
+      cuts an air short (docs/validation.md: takeoff 12 frames late). Keep it
+      small: the label does not change, so trimming a third of the air teaches
+      the model that the total turn means nothing. At (-0.1, 0.3) with a 0.5
+      to 2x camera gain the encoded path read 0.92x the true spin against 1.11x
+      on clean airs, and the rotation head fell to 16% (docs/classifier.md).
     * Frames are thinned by a random stride, which is the same air at a lower
       slow-motion factor, and a random hole is punched in the pose track, as
       the tracker leaves while a rider is inverted.

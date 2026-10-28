@@ -106,6 +106,26 @@ def split_of(group: str) -> str:
     return "train"
 
 
+def assign_splits(groups: list[str]) -> dict[str, str]:
+    """Train/val/test for whole groups, by the rank of each group's hash.
+
+    A hash threshold per group (``split_of``) can leave test empty when there
+    are only a handful of groups, as there are while the scale-up is
+    rendering (eight clips per group). Ranking keeps the fractions and
+    guarantees at least one test and one val group once there are three.
+    """
+    ordered = sorted(set(groups), key=lambda g: hashlib.sha1(g.encode()).hexdigest())
+    n = len(ordered)
+    if n < 3:
+        return {g: "train" for g in ordered}
+    n_test = max(1, round(n * TEST_FRACTION))
+    n_val = max(1, round(n * VAL_FRACTION))
+    out = {g: "test" for g in ordered[:n_test]}
+    out.update({g: "val" for g in ordered[n_test:n_test + n_val]})
+    out.update({g: "train" for g in ordered[n_test + n_val:]})
+    return out
+
+
 def manifest(data: Path) -> dict[str, dict]:
     """Clip name -> manifest row, from the synthetic scale-up's manifest."""
     path = data / "synth" / MANIFEST
@@ -245,9 +265,16 @@ def build(data: Path | None = None, heuristic: bool = True,
         if air is None:
             continue
         out.append(air)
-        if progress:
-            print(f"  {name}: {air.split:8s} group {air.group}  gt {air.gt}  "
-                  f"heuristic {air.heuristic}")
+    # Groups the manifest did not split are assigned by rank over all of them.
+    unsplit = [a for a in out if a.split != "original"
+               and (rows.get(a.name) or {}).get("split") not in ("train", "val", "test")]
+    assigned = assign_splits([a.group for a in unsplit])
+    for a in unsplit:
+        a.split = assigned[a.group]
+    if progress:
+        for a in out:
+            print(f"  {a.name}: {a.split:8s} group {a.group}  gt {a.gt}  "
+                  f"heuristic {a.heuristic}")
     return out
 
 
