@@ -233,6 +233,56 @@ def test_scale_plan_is_balanced_grouped_and_real():
     assert more[0].group == "synthbg003"
 
 
+def test_long_ground_rides_the_terrain_and_leaves_the_air_alone():
+    import copy
+    import re
+    from pathlib import Path
+
+    # tricks.py mirrors animate.py's pelvis drops, which need bpy to import.
+    source = (Path(tricks.__file__).parent / "blender" / "animate.py").read_text()
+    for name in ("DROP_STANDING", "DROP_TUCKED"):
+        assert float(re.search(rf"^{name} = ([0-9.]+)", source, re.M).group(1)) \
+            == getattr(tricks, name)
+
+    planned = tricks.scale_plan(6, seed=3, start=101, long_ground=True)
+    air = frames = 0
+    for t in planned:
+        m = tricks.motion(t)
+        flat = copy.deepcopy(t)
+        flat.terrain = False
+        reference = tricks.motion(flat)
+        T, L = m.takeoff_frame, m.landing_frame
+        # The air is exactly the trick the labels describe.
+        assert np.allclose(m.rotation[T:L + 1], reference.rotation[T:L + 1])
+        assert np.allclose(m.position[T:L + 1], reference.position[T:L + 1])
+        labels = tricks.labels(t, m)
+        assert labels["inversions"] == {"flat": 0, "cork": 1, "double_cork": 2}[t.kind]
+        air += labels["air_frames"]
+        frames += labels["frames"]
+
+        board = m.position - m.rotation[:, :, 2] * tricks._drop(m.tuck)[:, None]
+        lip, k = board[T], np.deg2rad(t.kicker_deg)
+        deck_z = lip[2] - tricks.DECK_BELOW_LIP
+        ramp_start = lip[1] - tricks.DECK_BELOW_LIP / np.tan(k)
+        before = board[:T]
+        on_deck = before[:, 1] <= ramp_start
+        # On the snow before the lip: on the deck, or on the kicker's slope.
+        assert np.allclose(before[on_deck, 2], deck_z)
+        assert np.allclose(before[~on_deck, 2], deck_z + (before[~on_deck, 1] - ramp_start) * np.tan(k))
+        # Down the landing, never below it, and slowing down.
+        touch, land = board[L], np.deg2rad(t.landing_deg)
+        after = board[L + 1:]
+        on_landing = after[:, 1] <= touch[1] + tricks.LANDING_RUN_M * np.cos(land)
+        assert np.allclose(after[on_landing, 2], touch[2] - np.tan(land) * (after[on_landing, 1] - touch[1]))
+        speed = np.linalg.norm(np.diff(after, axis=0), axis=1)
+        assert speed[-1] < speed[0]
+        # No ground frame turns the body faster than a rider can.
+        fps30 = [rotation_angle(m.rotation[i + 1] @ m.rotation[i].T) * t.slowmo
+                 for i in range(len(m.t) - 1) if i < T - 1 or i > L]
+        assert np.rad2deg(max(fps30)) < 12.0
+    assert air / frames < 0.4
+
+
 def test_trick_json_round_trips_with_group_seeds():
     t = tricks.scale_plan(1, seed=2)[0]
     assert tricks.Trick.from_json(t.to_json()) == t

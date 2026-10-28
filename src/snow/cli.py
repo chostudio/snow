@@ -471,7 +471,8 @@ def cmd_synth(args: argparse.Namespace) -> int:
 
     cfg.ensure_dirs()
     if args.step == "plan":
-        for clip in steps.plan(args.seed, scale=args.scale, start=args.start):
+        for clip in steps.plan(args.seed, scale=args.scale, start=args.start,
+                               long_ground=args.long_ground):
             labels = json.loads((clip / "labels.json").read_text())
             print(f"{clip.name:28s} {labels['inversions']} inversion(s), "
                   f"axis spin {labels['axis_spin_deg']:.0f}deg, "
@@ -681,6 +682,8 @@ def build_parser() -> argparse.ArgumentParser:
                          help="plan N clips of the balanced training set instead of the 20")
     p_synth.add_argument("--start", type=int, default=1,
                          help="first clip number for --scale")
+    p_synth.add_argument("--long-ground", action="store_true",
+                         help="--scale clips with long approaches and ride-outs on the snow")
     p_synth.add_argument("--spacing", type=float, default=None,
                          help="minimum seconds between NIM calls "
                               "(default 120 hosted, 0 self-hosted)")

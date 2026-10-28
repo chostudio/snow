@@ -31,7 +31,7 @@ def clips(only: list[str] | None = None) -> list[Path]:
     return found
 
 
-def plan(seed: int = 0, scale: int = 0, start: int = 1) -> list[Path]:
+def plan(seed: int = 0, scale: int = 0, start: int = 1, long_ground: bool = False) -> list[Path]:
     """Write ``trick.json`` + ``motion.npz`` + ``labels.json`` per trick.
 
     ``scale=0`` is the 20-trick validation set; ``scale=N`` is ``N`` clips of
@@ -39,7 +39,8 @@ def plan(seed: int = 0, scale: int = 0, start: int = 1) -> list[Path]:
     A clip that is already planned is left alone, so its render stays valid.
     """
     out = []
-    planned = tricks.scale_plan(scale, seed=seed, start=start) if scale else tricks.plan(seed)
+    planned = (tricks.scale_plan(scale, seed=seed, start=start, long_ground=long_ground)
+               if scale else tricks.plan(seed))
     for trick in planned:
         clip = SYNTH_DIR / trick.name
         if scale and (clip / "trick.json").exists():
@@ -180,7 +181,10 @@ def results(selected: list[Path]) -> list[dict]:
         oracle = f"{clip.name}-oracle"
         if cfg.pose_path(oracle).exists() and cfg.pose_path(clip.name).exists():
             pair = [compare.row(clip, "oracle", oracle), compare.row(clip, "pipeline", clip.name)]
-            cache.write_text(json.dumps(pair, indent=2, default=_plain))
+            # Only batch clips (they have a split group) are cached; the
+            # validation set's directories are left exactly as they are.
+            if json.loads((clip / "trick.json").read_text()).get("group"):
+                cache.write_text(json.dumps(pair, indent=2, default=_plain))
         elif cache.exists():
             pair = json.loads(cache.read_text())
         else:

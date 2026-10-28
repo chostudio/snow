@@ -173,11 +173,15 @@ def build(trick, motion, rng: np.random.Generator) -> dict:
 
     wide = 40.0
     # The in-run deck, the knuckle, the landing and the outrun, one surface.
+    # Long enough for any approach and ride-out the path holds; unchanged
+    # for the short ones the first clips have.
+    top_y = min(ramp_start - 60.0, float(path[:, 1].min()) - 20.0)
+    end_y = max(bottom_y + 120.0, float(path[:, 1].max()) + 30.0)
     profile = [
-        (ramp_start - 60.0, deck_z), (knuckle_y - 1.5, deck_z),
+        (top_y, deck_z), (knuckle_y - 1.5, deck_z),
         (knuckle_y + 1.5, landing_z(knuckle_y + 1.5)),
         (bottom_y, bottom_z), (bottom_y + 15.0, bottom_z - 3.0),
-        (bottom_y + 120.0, bottom_z - 3.0),
+        (end_y, bottom_z - 3.0),
     ]
     _strip("Hill", [[(x, y, z) for x in np.linspace(-wide, wide, 9)]
                     for y, z in profile], snow)
