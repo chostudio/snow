@@ -244,7 +244,7 @@ def summarise(rows: list[dict], methods=METHODS) -> dict:
 
 def holdout_split(clips: list[dict], fraction: float, seed: int = 0,
                   keep_in_train: set[str] = frozenset()) -> tuple[list[dict], list[dict]]:
-    """Hold out about ``fraction`` of the groups, whole.
+    """Hold out about ``fraction`` of the eligible groups, whole.
 
     Groups containing any clip in ``keep_in_train`` (the clips the settings
     were tuned on) always train, so the test set was never looked at.
@@ -253,7 +253,7 @@ def holdout_split(clips: list[dict], fraction: float, seed: int = 0,
     groups = sorted({c["group"] for c in clips} - pinned)
     rng = np.random.default_rng(seed)
     rng.shuffle(groups)
-    test_groups = set(groups[:max(1, int(round(fraction * len({c['group'] for c in clips}))))])
+    test_groups = set(groups[:max(1, int(round(fraction * len(groups))))])
     return ([c for c in clips if c["group"] not in test_groups],
             [c for c in clips if c["group"] in test_groups])
 
