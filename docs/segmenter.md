@@ -25,7 +25,7 @@ second.
 uv pip install -e '.[learn]'                       # torch
 snow segmenter build                               # labelled clips -> data/models/segmenter/dataset.npz
 snow segmenter evaluate                            # held-out scores vs both heuristics
-snow segmenter train --out data/weights/segmenter.pt
+snow segmenter train --out data/weights/segmenter.pt   # or fetch segmenter_scale154.pt from S3
 snow features run1 --segmenter data/weights/segmenter.pt
 web/tools/export_session.py run1                   # takes the segmenter's airs (--air rate to refuse)
 ```
@@ -144,24 +144,69 @@ Its weak spot against the dashboard detector is fragmentation: 3 airs split
 in two and 2 false airs, where the rate detector produced none. The interval
 is 20 clips wide; the two detectors' F1 intervals overlap.
 
-<!-- SCALED-RESULTS -->
+### 154 clips: the scaled set, held out by group
+
+The 20 clips above plus 134 from the scaled run (`MANIFEST.scale.jsonl`,
+Cycles renders, groups of four clips sharing a rider and venue): 154 clips,
+54 groups, 53,585 frames, 61% airborne. Taken when the manifest had 134
+clips and was still growing.
+
+**Headline: one held-out set never used for tuning.** 30 clips (8 groups)
+drawn only from the scaled set's groups; the 20 hand-planned clips the
+settings were chosen on always train. Trained on the other 124 clips.
+
+| method | frame F1 (95% CI) | precision | recall | airs found | split | false airs | takeoff error, median (mean) frames | landing error, median (mean) frames |
+|---|---|---|---|---|---|---|---|---|
+| segmenter (tcn) | 0.953 (0.916 to 0.983) | 0.980 | 0.927 | 30/30 | 2 | 2 | 2.0 (14.7) | 1.0 (4.3) |
+| `airborne_hint` (old) | 0.707 (0.658 to 0.746) | 0.876 | 0.592 | 30/30 | 26 | 39 | 50.0 (71.7) | 38.0 (50.4) |
+| dashboard detector | 0.852 (0.777 to 0.917) | 0.983 | 0.751 | 30/30 | 5 | 0 | 5.5 (33.7) | 10.0 (31.5) |
+| every seen frame (floor) | 0.801 (0.773 to 0.823) | 0.688 | 0.958 | 30/30 | 0 | 0 | 22.5 (41.3) | 51.0 (58.3) |
+
+Median boundary error in real time: segmenter 33 ms at takeoff and 17 ms at
+landing, dashboard detector 108 ms and 96 ms. Both boundaries within 3
+frames: 19 of 30 airs against 7 of 30.
+
+**Every clip once: 5-fold cross-validation by group** over all 154 clips
+(the settings were tuned on 20 of them, so slightly optimistic):
+
+| method | frame F1 (95% CI) | precision | recall | airs found | split | false airs | takeoff error, median (mean) frames | landing error, median (mean) frames |
+|---|---|---|---|---|---|---|---|---|
+| segmenter (tcn) | 0.968 (0.958 to 0.977) | 0.981 | 0.955 | 154/154 | 6 | 9 | 1.0 (6.7) | 1.0 (5.9) |
+| `airborne_hint` (old) | 0.705 (0.686 to 0.723) | 0.867 | 0.594 | 154/154 | 136 | 201 | 54.5 (73.5) | 39.5 (53.6) |
+| dashboard detector | 0.884 (0.861 to 0.907) | 0.979 | 0.806 | 153/154 | 26 | 5 | 6.0 (27.4) | 9.0 (27.6) |
+| every seen frame (floor) | 0.812 (0.802 to 0.822) | 0.695 | 0.977 | 154/154 | 0 | 0 | 21.0 (37.8) | 55.5 (58.3) |
+
+On synthetic big air the segmenter beats both heuristics clearly: on
+boundaries (median 1 to 2 frames against 5.5 to 10 for the dashboard
+detector) and on frame F1, where its interval clears the dashboard's. The
+dashboard detector is more conservative (it misses the slow ends of airs,
+recall 0.75 to 0.81) and splits more airs; the segmenter's mean errors are
+pulled up by a few airs where it misses a hidden takeoff or fragments.
+
+The shipped weights (`segmenter_scale154.pt`, all 154 clips) are in
+`s3://snow-artifacts-009160029345/models/segmenter/weights/`, with the
+dataset bundle and every evaluation run beside them.
+
 
 ### Real footage: unmeasured, and a warning
 
 No real clip has labels, so there is no real accuracy number. As a sanity
-check only, the 20-clip model was run on the two real clips with poses:
+check only, the shipped 154-clip model was run on the two real clips with
+poses:
 
-- `run1` (halfpipe, 720 frames, 4 shots): the segmenter marks most of the
-  clip airborne, including the rider standing at the top before dropping in;
-  the dashboard detector finds 2 airs.
-- `trick` (one slow-motion trick, 312 frames): the segmenter marks frames 3
+- `run1` (halfpipe, 720 frames, 4 shots): the segmenter marks about 500 of
+  the 644 frames with a body airborne, including the rider standing at the
+  top before dropping in; the dashboard detector finds 2 airs.
+- `trick` (one slow-motion trick, 312 frames): the segmenter marks frames 6
   to 303 airborne; the dashboard detector 40 to 260.
+
+Seven times more synthetic data did not change this.
 
 That is a domain gap, not a tuning problem. The synthetic clips are big air
 only, with 0.8 s of straight in-run and 0.8 s of ride-out: the model has never
 seen standing, walking, carving a halfpipe wall, crowds or a far camera. The
-jitter augmentation reduced the damage (on `run1`, from about 640 to 490 of
-the 644 frames with a body called airborne); it did not fix it. **Do not enable it
+jitter augmentation reduced the damage for the 20-clip model (on `run1`,
+from about 640 to 490 frames); it did not fix it. **Do not enable it
 on real footage** until a gold set shows otherwise; the next synthetic batch
 should include long riding, standing and non-trick stretches.
 
@@ -213,6 +258,7 @@ synthetic and real rows separate in anything published.
 
 ## Cost
 
-Trained and evaluated on the shared `g6.xlarge` (L4) in us-west-2. A
-5-fold cross-validation run on 20 clips takes about a minute of GPU time; a
-full training run about 15 s.
+Trained and evaluated on the shared `g6.xlarge` (L4) in us-west-2, which
+other work kept running. On 154 clips a 5-fold cross-validation takes a few
+minutes and a full training run about a minute; everything on this page
+used well under an hour of GPU time.
