@@ -2,6 +2,7 @@
 """Build a browser-ready session bundle from a clip's pose output.
 
     ../.venv/bin/python tools/export_session.py run1
+    ../.venv/bin/python tools/export_session.py run1 --classify   # + model B, if trained
 
 Reads ``data/poses/<name>.json`` (JSONL, one frame per line) plus the clip
 itself and writes ``web/public/sessions/<name>/`` — a quantised pose track, a
@@ -526,7 +527,37 @@ def rule_based_coach(events: list[dict], clip: dict, measure: str) -> dict:
     }
 
 
-def main(name: str, coach: str = "rule-based", detector: str = "auto") -> None:
+def classify_events(name: str, events: list[dict]) -> str:
+    """Add model B's trick reading to each air, when weights exist.
+
+    Opt-in (``--classify``) and never required: without weights, or without
+    torch, the bundle is written exactly as before and says why. The model
+    was trained on synthetic renders only, so its answer sits beside the
+    measured rotation rather than replacing it (docs/classifier.md).
+    """
+    try:
+        from snow import camera as cam
+        from snow import features as feat
+        from snow.learn import airs
+        from snow.learn import classifier as clf
+    except ImportError as exc:
+        return f"unavailable ({exc})"
+    if not clf.available():
+        return f"unavailable (no weights at {clf.WEIGHTS.relative_to(REPO)})"
+    model = clf.Classifier.load()
+    camera_path = REPO / "data" / "poses" / f"{name}.camera.npz"
+    track = airs.track_from_poses(
+        feat.load_poses(REPO / "data" / "poses" / f"{name}.json"), 0,
+        cam.CameraTrack.load(camera_path) if camera_path.exists() else None)
+    for e in events:
+        got = model.classify(track, e["start_f"], e["end_f"])
+        if got is not None:
+            e["metrics"]["classifier"] = got
+    return "model-b (trained on synthetic renders only)"
+
+
+def main(name: str, coach: str = "rule-based", detector: str = "auto",
+         classify: bool = False) -> None:
     poses = REPO / "data" / "poses" / f"{name}.json"
     clip_src = REPO / "data" / "clips" / f"{name}.mp4"
     for p in (poses, clip_src):
@@ -571,6 +602,9 @@ def main(name: str, coach: str = "rule-based", detector: str = "auto") -> None:
     events = find_events(recs, clip["real_fps"], clip["fps"], detector)
     air_source = ("segmenter" if detector != "rate" and recs and all("airborne" in r for r in recs)
                   else "rate")
+    classifier_source = classify_events(name, events) if classify else "off"
+    if classify:
+        print(f"  classifier: {classifier_source}")
 
     ids = [r["f"] for r in recs]
     gaps = [[a + 1, b - 1] for a, b in zip(ids, ids[1:]) if b - a > 1]
@@ -586,6 +620,7 @@ def main(name: str, coach: str = "rule-based", detector: str = "auto") -> None:
             "coach": "rule-based",
             "pose": "nvidia-body-pose-nim",
             "air_detector": air_source,
+            "classifier": classifier_source,
         },
         "skeleton": {"parents": PARENTS, "links": LINKS, "joints": J, "num_joints": len(PARENTS)},
         "gaps": gaps,
@@ -666,5 +701,7 @@ if __name__ == "__main__":
     parser.add_argument("--air", choices=["auto", "rate", "segmenter"], default="auto",
                         help="air detector: the learned segmenter when `snow features` "
                              "wrote its output (auto), or the rate hysteresis")
+    parser.add_argument("--classify", action="store_true",
+                        help="add model B's trick reading to each air, when weights exist")
     args = parser.parse_args()
-    main(args.name, args.coach, args.air)
+    main(args.name, args.coach, args.air, args.classify)

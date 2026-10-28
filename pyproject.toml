@@ -19,9 +19,8 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["pytest>=8.0", "usd-core>=24.0"]
-learn = [
-    "torch>=2.2",
-]
+# Models A and B (snow segmenter, snow classify). ultralytics already pulls torch in.
+learn = ["torch>=2.2"]
 
 [project.scripts]
 snow = "snow.cli:main"

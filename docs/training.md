@@ -1,10 +1,12 @@
 # Training the models
 
-> **Status: model A is built** as `snow segmenter` (`src/snow/learn/`), see
-> [segmenter.md](segmenter.md): trained and measured on synthetic clips only,
-> unmeasured on real footage, and opt-in. Models B and C are planned, not
-> built: the pipeline otherwise *measures* rotation, it does not *classify*
-> tricks.
+> **Status: models A and B are built** (`src/snow/learn/`), both trained and
+> measured on synthetic renders only. Model A, the airborne segmenter
+> (`snow segmenter`, [segmenter.md](segmenter.md)), is unmeasured on real
+> footage and opt-in. Model B, the trick classifier (`snow classify`,
+> [classifier.md](classifier.md)), reads sense and stance well; spin and axis
+> do not beat the geometry, so the pipeline's own numbers stay geometric.
+> Model C, the judge, is design only.
 
 The companion to the two diagrams in the [README](../README.md): those show
 how a clip is processed, this shows how the models in step 4 and step 6 would
@@ -196,12 +198,17 @@ quantities. Feed those.
 
 ### Mirroring flips the label
 
-Horizontal mirror is the obvious augmentation and it is a trap: mirroring a
-frontside rotation makes it backside, and regular stance switch. If you mirror
-the pose without flipping the direction label, you teach the model that
-direction does not matter, and direction is half the trick name.
+Horizontal mirror is the obvious augmentation and it is a trap: mirroring
+reverses the turn's sense (clockwise becomes counter-clockwise) and switches
+the stance (regular becomes goofy). If you mirror the pose without flipping
+those labels, you teach the model that the sense does not matter.
 
-Mirror freely, but flip the label with it.
+Correction, found while building the classifier: frontside/backside itself
+**survives** a mirror, because it is the product of sense and stance and both
+flip. So the classifier predicts sense and stance and composes
+frontside/backside from them ([classifier.md](classifier.md)).
+
+Mirror freely, but flip the sense and stance labels with it.
 
 ### Never window across a camera cut
 

@@ -60,7 +60,7 @@ alone. That is the main reason the pipeline is debuggable, so preserve it.
 | `src/snow/serve.py` | `snow serve`: the dashboard's routes plus `POST /<name>/coach`, stdlib only | [docs/coach.md](docs/coach.md) |
 | `src/snow/cli.py` | argparse surface for every stage | — |
 | `src/snow/synth/` | synthetic tricks with exact labels: Nova-77 rider in Blender, renders, comparison | [docs/synthetic.md](docs/synthetic.md) |
-| `src/snow/learn/` | model A, the per-frame airborne segmenter: inputs, training, evaluation, real-air label format | [docs/segmenter.md](docs/segmenter.md) |
+| `src/snow/learn/` | the learned half: model A, the per-frame airborne segmenter (`snow segmenter`), and model B, the trick classifier (`snow classify`) | [docs/segmenter.md](docs/segmenter.md), [docs/classifier.md](docs/classifier.md) |
 | `web/` | review dashboard + session exporter | [web/README.md](web/README.md) |
 
 Cross-cutting: **[docs/validation.md](docs/validation.md)** — what is actually
@@ -68,11 +68,14 @@ proven, what is not, and which claims you may not make. Read it before you
 write anything user-facing about accuracy.
 
 **[docs/training.md](docs/training.md)** is the design for the learned half
-(airborne segmenter, trick classifier, judging score). Only model A, the
-segmenter, is built ([docs/segmenter.md](docs/segmenter.md)): measured on
-synthetic clips only, opt-in via `snow features --segmenter`, and **not to
-be enabled on real footage** until a hand-labelled gold set exists. The
-classifier and the judge are not built. Its
+(airborne segmenter, trick classifier, judging score). Models A and B are
+built, both trained and measured on synthetic renders only. The segmenter
+([docs/segmenter.md](docs/segmenter.md)) is opt-in via `snow features
+--segmenter` and **not to be enabled on real footage** until a hand-labelled
+gold set exists. The classifier ([docs/classifier.md](docs/classifier.md))
+reads the turn's sense and the stance well and does not beat the geometric
+spin count or axis, so the dashboard's numbers stay geometric. The judge is
+not built. Its
 **Synthetic ground truth in Omniverse** section is now built, as
 `snow synth` ([docs/synthetic.md](docs/synthetic.md)): parametric tricks on a
 rider rigged as the NIM's own 77-joint skeleton, rendered and run through the
@@ -101,6 +104,7 @@ Everything under `data/` is gitignored. For a clip named `run1`:
 | `data/poses/<clip>-oracle.*` | `snow synth prepare` | ground truth in the NIM's schema, through `features` |
 | `data/models/segmenter/` | `snow segmenter` | dataset bundles, evaluation runs; weights also in S3 |
 | `data/weights/segmenter.pt` | you, by hand | segmenter weights `snow features` picks up by default; absent, the old heuristic runs |
+| `data/models/classifier/` | `snow classify` | dataset, `classifier.pt` (weights in S3, never committed), cv and split reports |
 
 ## Invariants
 
@@ -165,7 +169,7 @@ git diff --cached | grep -niE "nvapi-|api[_-]key|secret|bearer"
 ```bash
 source .venv/bin/activate
 snow doctor                 # tools, packages, vendored client, endpoint, key
-python -m pytest -q         # 105 tests, ~20s, no network and no GPU
+python -m pytest -q         # all tests, ~20s, no network and no GPU
 ```
 
 The venv is pinned to **Python 3.12**: the NVIDIA client supports 3.10–3.12
@@ -214,6 +218,10 @@ specification for nine things:
   no window or interpolation crosses a cut, folds never split a group,
   oracle skeletons are refused, and without weights `snow features` runs
   the old heuristic. Torch-dependent cases skip without torch.
+- `tests/test_classifier.py` — the classifier's air encoding: a mirror
+  reverses the turn and flips sense and stance but not frontside/backside, slow
+  motion encodes like real time, an air is never read across a cut, and
+  prediction is mirror-equivariant.
 
 When you change measurement code, add the synthetic case that pins the
 property, not a regression test against whatever number it printed today.

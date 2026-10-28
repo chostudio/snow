@@ -1,4 +1,4 @@
-"""Command line entry point: snow ingest | track | pose | run | doctor | coach | serve."""
+"""Command line entry point: snow ingest | track | pose | run | classify | doctor | coach | serve."""
 
 from __future__ import annotations
 
@@ -535,6 +535,67 @@ def cmd_serve(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_classify(args: argparse.Namespace) -> int:
+    """Model B, the trick classifier; see docs/training.md and docs/classifier.md."""
+    from .learn import classifier as clf
+    from .learn import dataset as ds
+    from .learn import experiment as exp
+
+    data = Path(args.data) if args.data else cfg.DATA_DIR
+    out = Path(args.out) if args.out else data / "models" / "classifier"
+    dataset = Path(args.dataset) if args.dataset else out / "dataset.npz"
+    if args.step == "build":
+        records = ds.build(data, heuristic=not args.no_heuristic)
+        ds.save(records, dataset)
+        splits = {s: sum(a.split == s for a in records) for s in ("train", "val", "test",
+                                                                   "original")}
+        print(f"{len(records)} airs -> {dataset}  {splits}")
+        return 0
+    if args.step == "predict":
+        if not clf.available(Path(args.weights) if args.weights else clf.WEIGHTS):
+            print("no classifier weights; run `snow classify train` or fetch them from S3",
+                  file=sys.stderr)
+            return 1
+        from .synth import compare
+
+        model = clf.Classifier.load(Path(args.weights) if args.weights else clf.WEIGHTS)
+        name = args.name
+        camera = cfg.POSES_DIR / f"{name}.camera.npz"
+        track = clf.airs.track_from_poses(
+            feat.load_poses(cfg.pose_path(name)), 0,
+            cam.CameraTrack.load(camera) if camera.exists() else None)
+        events = compare.air_events(name)
+        if not events:
+            print(f"{name}: no air found by the detector")
+        for e in events:
+            got = model.classify(track, e["start_f"], e["end_f"])
+            measured = e["metrics"]["nearest_spin_deg"]
+            print(f"  {e['id']} frames {e['start_f']}-{e['end_f']}: "
+                  f"{got['name'] if got else 'no poses'}  (geometry says {measured})")
+            if got:
+                print("    " + "  ".join(f"{h} {got[h]['label']} p={got[h]['p']:.2f}"
+                                         for h in ds.HEADS))
+        return 0
+
+    records = ds.load(dataset)
+    config = clf.TrainConfig(epochs=args.epochs, seed=args.seed, width=args.width)
+    print(f"{len(records)} airs; building {args.per_air} variants each")
+    variants = clf.bank(records, per_air=args.per_air, seed=args.seed, workers=args.workers)
+    if args.step == "cv":
+        pool = [a for a in records if args.include_scale or a.split == "original"] or records
+        report = exp.cross_validate(pool, variants, folds=args.folds, config=config,
+                                    device=args.device)
+        exp.write(report, out / "cv_report.json")
+        print(exp.markdown(report))
+        return 0
+    checkpoint, report = exp.fit_split(records, variants, config=config, device=args.device,
+                                       extra_train=args.extra_train)
+    clf.save(checkpoint, Path(args.weights) if args.weights else out / "classifier.pt")
+    exp.write(report, out / "split_report.json")
+    print(exp.markdown(report))
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="snow",
@@ -732,6 +793,31 @@ def build_parser() -> argparse.ArgumentParser:
         "segmenter", help="airborne segmenter: build dataset, evaluate, train, label template"
     )
     learn_cli.build_parser(p_seg)
+
+    p_cls = sub.add_parser(
+        "classify", help="trick classifier (model B): build, cv, train, predict"
+    )
+    p_cls.add_argument("step", choices=["build", "cv", "train", "predict"])
+    p_cls.add_argument("name", nargs="?", help="clip to classify (predict)")
+    p_cls.add_argument("--data", help="data directory (default: the repo's data/)")
+    p_cls.add_argument("--out", help="artifact directory (default: data/models/classifier)")
+    p_cls.add_argument("--dataset", help="dataset .npz (default: out/dataset.npz)")
+    p_cls.add_argument("--weights", help="checkpoint path (default: out/classifier.pt)")
+    p_cls.add_argument("--no-heuristic", action="store_true",
+                       help="build: skip the dashboard detector's windows")
+    p_cls.add_argument("--per-air", type=int, default=128,
+                       help="augmented variants per training air")
+    p_cls.add_argument("--epochs", type=int, default=40)
+    p_cls.add_argument("--width", type=int, default=64)
+    p_cls.add_argument("--seed", type=int, default=0)
+    p_cls.add_argument("--folds", type=int, help="cv: folds (default: one per group)")
+    p_cls.add_argument("--include-scale", action="store_true",
+                       help="cv: pool the scale-up clips too, not just the original 20")
+    p_cls.add_argument("--extra-train", action="store_true",
+                       help="train: also train on the original 20 (then unscored)")
+    p_cls.add_argument("--workers", type=int, default=4)
+    p_cls.add_argument("--device", help="cuda or cpu (default: cuda if available)")
+    p_cls.set_defaults(func=cmd_classify)
 
     return parser
 
