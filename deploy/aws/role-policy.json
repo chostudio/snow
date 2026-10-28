@@ -1,0 +1,4 @@
+{"Version":"2012-10-17","Statement":[
+ {"Effect":"Allow","Action":["ssm:GetParameter","ssm:GetParametersByPath"],"Resource":"arn:aws:ssm:us-west-2:009160029345:parameter/app/snow/*"},
+ {"Effect":"Allow","Action":["s3:GetObject","s3:PutObject","s3:DeleteObject"],"Resource":"arn:aws:s3:::snow-artifacts-009160029345/*"},
+ {"Effect":"Allow","Action":["s3:ListBucket","s3:GetBucketLocation"],"Resource":"arn:aws:s3:::snow-artifacts-009160029345"}]}
