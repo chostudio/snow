@@ -24,14 +24,34 @@ from .segmenter import WINDOW, Segmenter, build_model, parameter_count
 
 TIMEBASE_RANGE = (0.5, 2.0)   # random playback-rate stretch, log-uniform
 NOISE = 0.05                  # gaussian noise, in standardised units
+# Per-frame pose jitter, drawn per segment up to these sizes in the channels'
+# own units. Rendered riders come out of the NIM far steadier than broadcast
+# ones: on the ground, synthetic rot_step has a median of 0.05 (0.5 deg per
+# frame) while the two real clips read 0.26 and 0.35, as much as synthetic
+# air. Without this the model learns "any rotation is air".
+JITTER_MAX = {"rot_step": 0.5, "elev_step": 0.5, "azim_step": 0.5, "pose": 0.05}
+# Inputs left out by default, measured on synthetic data and checked against
+# the real clips (docs/segmenter.md): confidence is a renderer property
+# (median 0.91 synthetic, 0.59 to 0.64 real), and the body-frame pose let
+# 16 training clips be memorised.
+DEFAULT_IGNORE = ("confidence", "pose")
 
 
-def standardiser(clips: list[dict]) -> tuple[np.ndarray, np.ndarray]:
+def standardiser(clips: list[dict], ignore: tuple[str, ...] = ()) -> tuple[np.ndarray, np.ndarray]:
+    """Per-channel mean and std over the training clips (and their mirrors).
+
+    A channel whose name starts with one of ``ignore`` gets a huge std, so it
+    reads as zero after standardising: an ablation that travels with the
+    weights rather than needing a different input layout.
+    """
     stacked = np.concatenate([np.concatenate([c["x"], c["x_mirror"]]) for c in clips])
     mean = stacked.mean(axis=0)
     std = np.maximum(stacked.std(axis=0), 1e-3)
     # The present flag stays 0/1 so a padded frame reads as absent.
     mean[I.PRESENT], std[I.PRESENT] = 0.0, 1.0
+    for k, name in enumerate(I.CHANNELS):
+        if name.startswith(tuple(ignore)) and ignore:
+            mean[k], std[k] = 0.0, 1e9
     return mean.astype(np.float32), std.astype(np.float32)
 
 
@@ -39,6 +59,19 @@ def _segments(clip: dict):
     seg = clip["segment"]
     for s in np.unique(seg):
         yield np.flatnonzero(seg == s)
+
+
+def jitter(x: np.ndarray, rng: np.random.Generator, seen: np.ndarray) -> None:
+    """Add NIM-like per-frame noise in place, at a random level per segment."""
+    for name, top in JITTER_MAX.items():
+        cols = [k for k, c in enumerate(I.CHANNELS) if c.startswith(name)]
+        sigma = rng.uniform(0.0, top)
+        noise = rng.normal(0.0, sigma, size=(len(x), len(cols)))
+        if name == "rot_step":
+            x[:, cols] = np.abs(x[:, cols] + noise)  # an angle step is unsigned
+        else:
+            x[:, cols] += noise
+        x[np.ix_(~seen, cols)] = 0.0
 
 
 def sample_windows(clips: list[dict], mean: np.ndarray, std: np.ndarray,
@@ -60,6 +93,7 @@ def sample_windows(clips: list[dict], mean: np.ndarray, std: np.ndarray,
             x, y = I.resample(source[rows], clip["y"][rows].astype(np.float32), factor)
             # No loss where there is no evidence (see inputs.observed).
             seen = I.observed(x[:, I.PRESENT], np.zeros(len(x), int)).astype(np.float32)
+            jitter(x, rng, seen > 0)
             x = (x - mean) / std
             n = len(x)
             if n < window:
@@ -85,11 +119,11 @@ def sample_windows(clips: list[dict], mean: np.ndarray, std: np.ndarray,
 
 def fit(train: list[dict], arch: str = "tcn", epochs: int = 60, batch: int = 64,
         lr: float = 2e-3, seed: int = 0, window: int = WINDOW, device: str | None = None,
-        log=print) -> Segmenter:
+        ignore: tuple[str, ...] = DEFAULT_IGNORE, log=print) -> Segmenter:
     torch.manual_seed(seed)
     rng = np.random.default_rng(seed)
     device = device or ("cuda" if torch.cuda.is_available() else "cpu")
-    mean, std = standardiser(train)
+    mean, std = standardiser(train, ignore)
     model = build_model(arch, window=window).to(device)
     labels = np.concatenate([c["y"][I.observed(c["x"][:, I.PRESENT], c["segment"])]
                              for c in train])
@@ -126,7 +160,7 @@ def fit(train: list[dict], arch: str = "tcn", epochs: int = 60, batch: int = 64,
     return Segmenter(model=model, arch=arch, mean=mean, std=std, window=window,
                      info={"params": parameter_count(model), "epochs": epochs,
                            "train_clips": [c["name"] for c in train],
-                           "pos_fraction": float(pos)})
+                           "pos_fraction": float(pos), "ignore": list(ignore)})
 
 
 # --- scoring -----------------------------------------------------------------
@@ -160,6 +194,13 @@ def summarise(rows: list[dict], methods=METHODS) -> dict:
         if not have:
             continue
         counts = {k: sum(r[method]["counts"][k] for r in have) for k in ("tp", "fp", "fn", "tn")}
+        # 95% interval for pooled frame F1, resampling whole clips.
+        rng = np.random.default_rng(0)
+        boot = []
+        for _ in range(1000):
+            pick = rng.integers(0, len(have), len(have))
+            c = {k: sum(have[i][method]["counts"][k] for i in pick) for k in ("tp", "fp", "fn")}
+            boot.append(E.f1(c))
         airs = [a for r in have for a in r[method]["airs"]]
         slow = [r["slowmo"] for r in have for _ in r[method]["airs"]]
         hit = [(a, s) for a, s in zip(airs, slow) if not a["missed"]]
@@ -178,6 +219,8 @@ def summarise(rows: list[dict], methods=METHODS) -> dict:
         out[method] = {
             "clips": len(have),
             "frame_f1": round(E.f1(counts), 4),
+            "frame_f1_ci95": [round(float(np.percentile(boot, 2.5)), 4),
+                              round(float(np.percentile(boot, 97.5)), 4)],
             "precision": round(precision, 4),
             "recall": round(recall, 4),
             "mean_clip_f1": round(float(np.mean([r[method]["f1"] for r in have])), 4),
@@ -197,14 +240,36 @@ def summarise(rows: list[dict], methods=METHODS) -> dict:
     return out
 
 
+def holdout_split(clips: list[dict], fraction: float, seed: int = 0,
+                  keep_in_train: set[str] = frozenset()) -> tuple[list[dict], list[dict]]:
+    """Hold out about ``fraction`` of the groups, whole.
+
+    Groups containing any clip in ``keep_in_train`` (the clips the settings
+    were tuned on) always train, so the test set was never looked at.
+    """
+    pinned = {c["group"] for c in clips if c["name"] in keep_in_train}
+    groups = sorted({c["group"] for c in clips} - pinned)
+    rng = np.random.default_rng(seed)
+    rng.shuffle(groups)
+    test_groups = set(groups[:max(1, int(round(fraction * len({c['group'] for c in clips}))))])
+    return ([c for c in clips if c["group"] not in test_groups],
+            [c for c in clips if c["group"] in test_groups])
+
+
 def evaluate(clips: list[dict], folds: int = 5, arch: str = "tcn", epochs: int = 60,
-             seed: int = 0, window: int = WINDOW, log=print) -> dict:
+             seed: int = 0, window: int = WINDOW, holdout: float | None = None,
+             keep_in_train: set[str] = frozenset(), ignore: tuple[str, ...] = DEFAULT_IGNORE,
+             log=print) -> dict:
     """Held-out scores for every method on the same clips."""
     fixed = [c for c in clips if c.get("split") in ("train", "test")]
     if fixed and len(fixed) == len(clips):
         plan = [([c for c in clips if c["split"] == "train"],
                  [c for c in clips if c["split"] == "test"])]
         protocol = "fixed split from the manifest"
+    elif holdout:
+        plan = [holdout_split(clips, holdout, seed, keep_in_train)]
+        protocol = (f"one held-out set of {len(plan[0][1])} clips "
+                    f"({len({c['group'] for c in plan[0][1]})} groups), never used for tuning")
     else:
         fold = group_folds(clips, folds, seed)
         plan = [([c for c, f in zip(clips, fold) if f != k],
@@ -216,7 +281,8 @@ def evaluate(clips: list[dict], folds: int = 5, arch: str = "tcn", epochs: int =
         log(f"  fold {k}: {len(train)} train clips, {len(test)} held out "
             f"({len({c['group'] for c in test})} groups)")
         start = time.time()
-        seg = fit(train, arch=arch, epochs=epochs, seed=seed + k, window=window, log=log)
+        seg = fit(train, arch=arch, epochs=epochs, seed=seed + k, window=window,
+                  ignore=ignore, log=log)
         log(f"    trained in {time.time() - start:.0f}s")
         for clip in test:
             prob, mask = predict(seg, clip)
@@ -227,6 +293,7 @@ def evaluate(clips: list[dict], folds: int = 5, arch: str = "tcn", epochs: int =
             row["prob"] = [round(float(p), 3) if np.isfinite(p) else None for p in prob]
             rows.append(row)
     return {"protocol": protocol, "arch": arch, "epochs": epochs, "window": window,
+            "ignore": list(ignore),
             "params": parameter_count(build_model(arch, window=window)),
             "clips": len(clips), "groups": len({c["group"] for c in clips}),
             "summary": summarise(rows), "per_clip": rows}
@@ -235,12 +302,14 @@ def evaluate(clips: list[dict], folds: int = 5, arch: str = "tcn", epochs: int =
 def report_table(result: dict) -> str:
     names = {"segmenter": f"segmenter ({result['arch']})", "hint": "airborne_hint (old)",
              "web": "dashboard detector", "always": "every seen frame (floor)"}
-    lines = ["| method | frame F1 | precision | recall | airs found | split | false airs "
+    lines = ["| method | frame F1 (95% CI) | precision | recall | airs found | split | false airs "
              "| takeoff err, median (mean) frames | landing err, median (mean) frames |",
              "|---|---|---|---|---|---|---|---|---|"]
     for method, s in result["summary"].items():
+        lo, hi = s["frame_f1_ci95"]
         lines.append(
-            f"| {names[method]} | {s['frame_f1']:.3f} | {s['precision']:.3f} | {s['recall']:.3f} "
+            f"| {names[method]} | {s['frame_f1']:.3f} ({lo:.3f} to {hi:.3f}) "
+            f"| {s['precision']:.3f} | {s['recall']:.3f} "
             f"| {s['airs'] - s['missed']}/{s['airs']} | {s['split_airs']} | {s['false_airs']} "
             f"| {s['takeoff_median_abs_frames']} ({s['takeoff_mean_abs_frames']}) "
             f"| {s['landing_median_abs_frames']} ({s['landing_mean_abs_frames']}) |")

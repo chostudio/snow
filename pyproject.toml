@@ -19,6 +19,9 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["pytest>=8.0", "usd-core>=24.0"]
+learn = [
+    "torch>=2.2",
+]
 
 [project.scripts]
 snow = "snow.cli:main"

@@ -49,8 +49,12 @@ def cmd_evaluate(args: argparse.Namespace) -> int:
     from . import train as T
 
     clips = D.load_bundle(Path(args.bundle))
+    keep: set[str] = set()
+    if args.keep_in_train:
+        keep = {c["name"] for c in json.loads(Path(args.keep_in_train).read_text())["clips"]}
     result = T.evaluate(clips, folds=args.folds, arch=args.arch, epochs=args.epochs,
-                        seed=args.seed, window=args.window)
+                        seed=args.seed, window=args.window, holdout=args.holdout,
+                        keep_in_train=keep, ignore=tuple(args.ignore))
     T.save_result(result, Path(args.out))
     print(f"\n{result['protocol']}: {result['clips']} clips, {result['groups']} groups, "
           f"{result['arch']} with {result['params']:,} parameters\n")
@@ -64,7 +68,8 @@ def cmd_train(args: argparse.Namespace) -> int:
     from . import train as T
 
     clips = D.load_bundle(Path(args.bundle))
-    seg = T.fit(clips, arch=args.arch, epochs=args.epochs, seed=args.seed, window=args.window)
+    seg = T.fit(clips, arch=args.arch, epochs=args.epochs, seed=args.seed, window=args.window,
+                ignore=tuple(args.ignore))
     seg.info["bundle"] = str(args.bundle)
     seg.save(Path(args.out))
     print(f"{seg.arch}, {seg.info['params']:,} parameters, trained on {len(clips)} clips "
@@ -101,8 +106,16 @@ def build_parser(parser: argparse.ArgumentParser | None = None) -> argparse.Argu
         p.add_argument("--epochs", type=int, default=60)
         p.add_argument("--seed", type=int, default=0)
         p.add_argument("--window", type=int, default=64, help="frames per training window")
+        p.add_argument("--ignore", nargs="*", default=["confidence", "pose"],
+                       help="input channel name prefixes to blank (default: confidence "
+                            "pose; pass --ignore with nothing to use every input)")
         if name == "evaluate":
             p.add_argument("--folds", type=int, default=5)
+            p.add_argument("--holdout", type=float,
+                           help="instead of k-fold, hold out this fraction of groups once")
+            p.add_argument("--keep-in-train",
+                           help="a bundle index (.json) whose clips always train: the "
+                                "ones the settings were tuned on")
             p.add_argument("--out", default=str(MODEL_DIR / "eval.json"))
         else:
             p.add_argument("--out", default=str(DEFAULT_WEIGHTS))

@@ -257,6 +257,7 @@ def test_training_learns_an_obvious_air_and_features_uses_it(tmp_path, monkeypat
         frames = _clip(n=120, takeoff=t0, landing=t1)
         df = F.build(_write(tmp_path, frames, f"c{k}"), _meta())
         clips.append(_clip_dict(frames, df, f"c{k}", f"g{k}", t0, t1))
+    monkeypatch.setattr(T, "JITTER_MAX", {})  # plumbing, not robustness
     seg = T.fit(clips[:3], epochs=25, seed=0, device="cpu", log=lambda *_: None)
     prob, mask = T.predict(seg, clips[3])
     counts = E.frame_counts(mask, clips[3]["y"])
@@ -305,3 +306,16 @@ def test_dashboard_uses_the_segmenters_airs_when_present():
         del r["airborne"]
     with pytest.raises(ValueError):
         es.find_events(recs, 30.0, 30.0, detector="segmenter")
+
+
+def test_jitter_keeps_steps_unsigned_and_hidden_frames_empty():
+    pytest.importorskip("torch")
+    from snow.learn import train as T
+
+    x = np.zeros((50, I.NUM_CHANNELS), np.float32)
+    seen = np.arange(50) >= 10
+    x[seen, I.PRESENT] = 1.0
+    T.jitter(x, np.random.default_rng(0), seen)
+    assert np.all(x[:10] == 0)
+    assert np.all(x[:, I.CHANNELS.index("rot_step")] >= 0)
+    assert x[10:, I.CHANNELS.index("elev_step")].std() > 0
