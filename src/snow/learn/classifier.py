@@ -62,16 +62,22 @@ def build_model(channels: int = airs.N_CHANNELS, width: int = 64, dropout: float
             self.inp = nn.Conv1d(channels, width, 1)
             self.blocks = nn.Sequential(*[Block(d) for d in (1, 2, 4, 8, 1)])
             self.attn = nn.Conv1d(width, 1, 1)
+            # Pooled features plus the air's totals (the last step of each
+            # cumulative rotation channel), so the heads read the integrated
+            # turn directly instead of re-deriving it from a few examples.
+            pooled = 2 * width + len(airs.CUMULATIVE)
             self.heads = nn.ModuleDict({
-                name: nn.Linear(2 * width, len(classes)) for name, classes in ds.HEADS.items()
+                name: nn.Linear(pooled, len(classes)) for name, classes in ds.HEADS.items()
             })
-            # Spin in turns, as an auxiliary ordinal signal for the rotation head.
-            self.turns = nn.Linear(2 * width, 1)
+            # Spin in turns: trained as an auxiliary ordinal signal, and read
+            # as a second rotation answer (rounded to the nearest 180).
+            self.turns = nn.Linear(pooled, 1)
 
         def forward(self, x):
             h = self.blocks(self.inp(x))
             weights = torch.softmax(self.attn(h), dim=-1)
-            pooled = torch.cat([(h * weights).sum(-1), h.mean(-1)], dim=1)
+            ends = x[:, :len(airs.CUMULATIVE), -1]
+            pooled = torch.cat([(h * weights).sum(-1), h.mean(-1), ends], dim=1)
             out = {name: head(pooled) for name, head in self.heads.items()}
             out["turns"] = self.turns(pooled).squeeze(-1)
             return out
@@ -170,7 +176,7 @@ def train(train_names: list[str], variants: dict, config: TrainConfig | None = N
             loss.backward()
             opt.step()
             sched.step()
-            total += float(loss) * len(idx)
+            total += float(loss.detach()) * len(idx)
         if log and (epoch % 10 == 9 or epoch == config.epochs - 1):
             msg = f"    epoch {epoch + 1:3d}  loss {total / len(xt):.3f}"
             if val is not None:
@@ -225,14 +231,18 @@ class Classifier:
             def run(batch):
                 x = torch.tensor((np.stack(batch) - self.mean) / self.std,
                                  dtype=torch.float32, device=self.device)
-                return {h: torch.softmax(v, -1).cpu().numpy()
-                        for h, v in self.model(x).items() if h in ds.HEADS}
+                out = self.model(x)
+                got = {h: torch.softmax(v, -1).cpu().numpy()
+                       for h, v in out.items() if h in ds.HEADS}
+                got["turns"] = out["turns"].cpu().numpy()
+                return got
             probs = run(encoded)
             if mirrored is not None:
                 back = run(mirrored)
                 for h in HEAD_NAMES:
                     other = back[h][:, ::-1] if h in SWAPPED_BY_MIRROR else back[h]
                     probs[h] = (probs[h] + other) / 2
+                probs["turns"] = (probs["turns"] + back["turns"]) / 2
         return probs
 
     def classify(self, track: airs.Track, start: int, end: int) -> dict | None:
@@ -248,6 +258,8 @@ class Classifier:
 def describe(probs: dict[str, np.ndarray]) -> dict:
     """Head outputs as labels with confidences, and a composed trick name."""
     out = {}
+    if "turns" in probs:
+        out["spin_regressed_deg"] = round(float(probs["turns"]) * 360.0, 1)
     for head, classes in ds.HEADS.items():
         k = int(np.argmax(probs[head]))
         out[head] = {"label": classes[k], "p": round(float(probs[head][k]), 3)}

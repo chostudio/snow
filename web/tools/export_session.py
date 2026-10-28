@@ -2,6 +2,7 @@
 """Build a browser-ready session bundle from a clip's pose output.
 
     ../.venv/bin/python tools/export_session.py run1
+    ../.venv/bin/python tools/export_session.py run1 --classify   # + model B, if trained
 
 Reads ``data/poses/<name>.json`` (JSONL, one frame per line) plus the clip
 itself and writes ``web/public/sessions/<name>/`` — a quantised pose track, a
@@ -483,7 +484,36 @@ def rule_based_coach(events: list[dict], clip: dict, measure: str) -> dict:
     }
 
 
-def main(name: str) -> None:
+def classify_events(name: str, events: list[dict]) -> str:
+    """Add model B's trick reading to each air, when weights exist.
+
+    Opt-in (``--classify``) and never required: without weights, or without
+    torch, the bundle is written exactly as before and says why. The model
+    was trained on synthetic renders only, so its answer sits beside the
+    measured rotation rather than replacing it (docs/classifier.md).
+    """
+    try:
+        from snow import camera as cam
+        from snow import features as feat
+        from snow.learn import airs
+        from snow.learn import classifier as clf
+    except ImportError as exc:
+        return f"unavailable ({exc})"
+    if not clf.available():
+        return f"unavailable (no weights at {clf.WEIGHTS.relative_to(REPO)})"
+    model = clf.Classifier.load()
+    camera_path = REPO / "data" / "poses" / f"{name}.camera.npz"
+    track = airs.track_from_poses(
+        feat.load_poses(REPO / "data" / "poses" / f"{name}.json"), 0,
+        cam.CameraTrack.load(camera_path) if camera_path.exists() else None)
+    for e in events:
+        got = model.classify(track, e["start_f"], e["end_f"])
+        if got is not None:
+            e["metrics"]["classifier"] = got
+    return "model-b (trained on synthetic renders only)"
+
+
+def main(name: str, classify: bool = False) -> None:
     poses = REPO / "data" / "poses" / f"{name}.json"
     clip_src = REPO / "data" / "clips" / f"{name}.mp4"
     for p in (poses, clip_src):
@@ -526,6 +556,9 @@ def main(name: str) -> None:
 
     compute_rates(recs, clip["real_fps"])
     events = find_events(recs, clip["real_fps"], clip["fps"])
+    classifier_source = classify_events(name, events) if classify else "off"
+    if classify:
+        print(f"  classifier: {classifier_source}")
 
     ids = [r["f"] for r in recs]
     gaps = [[a + 1, b - 1] for a, b in zip(ids, ids[1:]) if b - a > 1]
@@ -541,6 +574,7 @@ def main(name: str) -> None:
             "rotation_measure": rotation_measure,
             "coach": "rule-based",
             "pose": "nvidia-body-pose-nim",
+            "classifier": classifier_source,
         },
         "skeleton": {"parents": PARENTS, "links": LINKS, "joints": J, "num_joints": len(PARENTS)},
         "gaps": gaps,
@@ -602,4 +636,5 @@ def main(name: str) -> None:
 
 
 if __name__ == "__main__":
-    main(sys.argv[1] if len(sys.argv) > 1 else "run1")
+    argv = [a for a in sys.argv[1:] if a != "--classify"]
+    main(argv[0] if argv else "run1", classify="--classify" in sys.argv[1:])

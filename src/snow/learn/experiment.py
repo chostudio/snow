@@ -115,6 +115,12 @@ def markdown(report: dict) -> str:
                 parts.append("")
                 parts.append(ev.confusion_md(results[w][head]["confusion"], ds.HEADS[head],
                                              f"{head}, model, {w} window"))
+            parts.append("")
+            parts.append(ev.confusion_md(results[w]["rotation"]["regressed_confusion"],
+                                         ds.ROTATIONS, f"rotation, regressed, {w} window"))
+            parts.append("")
+            parts.append(ev.confusion_md(results[w]["rotation"]["baseline_confusion"],
+                                         ds.ROTATIONS, f"rotation, geometric, {w} window"))
         parts.append("")
     return "\n".join(parts)
 

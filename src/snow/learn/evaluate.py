@@ -55,9 +55,15 @@ def predict(clf, records: list[ds.Air], which: str) -> list[dict | None]:
     if xs:
         probs = clf.probabilities(xs, xms)
         for k, i in enumerate(slots):
-            out[i] = {h: int(np.argmax(p[k])) for h, p in probs.items()}
-            out[i]["_p"] = {h: p[k].tolist() for h, p in probs.items()}
+            out[i] = {h: int(np.argmax(probs[h][k])) for h in ds.HEADS}
+            out[i]["rotation_reg"] = nearest_rotation(float(probs["turns"][k]) * 360.0)
+            out[i]["_p"] = {h: probs[h][k].tolist() for h in ds.HEADS}
     return out
+
+
+def nearest_rotation(deg: float) -> int:
+    """Class index of the multiple of 180 nearest ``deg`` (sign ignored)."""
+    return int(np.clip(round(abs(deg) / 180.0), 0, len(ds.ROTATIONS) - 1))
 
 
 def baseline(air: ds.Air, which: str, majority: dict[str, int]) -> dict:
@@ -107,6 +113,10 @@ def score(records: list[ds.Air], predictions: list[dict | None],
             "confusion": confusion(truth, got, classes).tolist(),
             "baseline_confusion": confusion(truth, base, classes).tolist(),
         }
+    truth_rot = [a.labels["rotation"] for a in records]
+    reg = [p["rotation_reg"] if p else None for p in predictions]
+    out["rotation"]["model_regressed"] = _acc(truth_rot, reg)
+    out["rotation"]["regressed_confusion"] = confusion(truth_rot, reg, ds.ROTATIONS).tolist()
     truth = [a.labels["sense"] for a in records]
     out["sense"]["baseline_path"] = _acc(truth, [b.get("sense_path") for b in baselines])
     # Rotation: also how far off, in degrees, and within one step.
@@ -180,6 +190,10 @@ def table(results: dict[str, dict]) -> str:
                 v = r[f"{who}_{extra}"]
                 cells.append(_frac(v) if isinstance(v, list) else str(v))
         lines.append(f"| {label} | " + " | ".join(cells) + " |")
+    cells = []
+    for w in windows:
+        cells += [_frac(results[w]["rotation"]["model_regressed"]), ""]
+    lines.append("| rotation, regressed turns rounded | " + " | ".join(cells) + " |")
     cells = []
     for w in windows:
         cells += ["", _frac(results[w]["sense"]["baseline_path"])]
