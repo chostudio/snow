@@ -331,3 +331,52 @@ def test_long_ground_clips_are_told_apart(tmp_path):
         (clip / "trick.json").write_text(json.dumps({"terrain": terrain}))
     sources = {s.name: s for s in D.discover(tmp_path)}
     assert sources["a"].variant == "long-ground" and sources["b"].variant == "big-air"
+
+
+# --- the calibrated noise model -------------------------------------------------
+
+
+def _ground_stretch(n=400, seed=0):
+    rng = np.random.default_rng(seed)
+    x = np.zeros((n, I.NUM_CHANNELS), np.float32)
+    x[:, I.PRESENT] = 1.0
+    x[:, I.CHANNELS.index("rot_step")] = np.abs(rng.normal(0, 0.03, n))  # 0.3 deg/frame
+    x[:, I.CHANNELS.index("cos_tilt")] = 1.0
+    x[:, I.CHANNELS.index("grab")] = 1.5
+    return x
+
+
+def test_noise_fit_recovers_a_known_noise():
+    """Real = synthetic ground plus a known AR(1) rotation noise: the fit
+    must find that noise, not some other that happens to match one number."""
+    from snow.learn import noise as N
+
+    rng = np.random.default_rng(1)
+    synth = [N.stretch_stats(_ground_stretch(seed=k)) for k in range(6)]
+    real_x = []
+    for k in range(6):
+        x = _ground_stretch(seed=10 + k)
+        rot = N.noisy_rot(x[:, N.ROT] * N.ROT_DEG, 2.0, 0.6, rng)
+        x[:, N.ROT] = rot / N.ROT_DEG
+        real_x.append(N.stretch_stats(x))
+    model = N.fit(N.summarise(real_x), synth)
+    assert model.rot_sigma_deg == pytest.approx(2.0, abs=0.3)
+    assert model.rot_phi == pytest.approx(0.6, abs=0.2)
+
+
+def test_noise_apply_keeps_hidden_frames_empty_and_holes_honest():
+    from snow.learn import noise as N
+
+    x = _ground_stretch()
+    seen = np.ones(len(x), bool)
+    seen[:20] = False
+    x[~seen] = 0.0
+    model = N.NoiseModel(rot_sigma_deg=1.5, rot_phi=0.8, grab_offset=-0.1, grab_sigma=0.03,
+                         tilt_offset_deg=8.0, hole_rate=0.02, hole_mean=10.0)
+    N.apply(x, np.random.default_rng(0), seen, model, strength=1.0)
+    assert np.all(x[:20] == 0)
+    rot = x[seen, N.ROT] * N.ROT_DEG
+    assert 1.0 < np.median(rot) < 4.0          # about the measured real 2.3 deg/frame
+    holes = seen & (x[:, I.PRESENT] == 0)
+    assert holes.any() and np.all(x[holes, N.ROT] == 0)
+    assert np.median(x[seen, N.GRAB]) == pytest.approx(1.4, abs=0.05)

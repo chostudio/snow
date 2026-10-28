@@ -420,8 +420,10 @@ produced no air event, so dashboard columns count 18.
 **Real footage: not proven.** Measured on synthetic renders only
 ([segmenter.md](segmenter.md)). On real clips it calls most of a halfpipe
 run airborne, including the rider standing at the top, and it still did
-after training on synthetic clips with standing starts and long riding: the
-renders' pose is far steadier than broadcast pose. Its real accuracy is not
+after training on synthetic clips with standing starts and long riding, and
+with noise measured on real ground pose added in training. What remains is
+systematic (a reference up tipped by a camera pitched at the rider, steady
+pans, crouched riding), not jitter. Its real accuracy is not
 just unmeasured but suspect. No real clip has
 hand-labelled takeoff and landing frames yet.
 
