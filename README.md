@@ -33,11 +33,13 @@ flowchart LR
 3. **Track** finds the rider and writes the box annotation the NIM needs. You
    stitch tracks across camera cuts by hand — guessing would fuse two riders.
 4. **Pose** sends clip and boxes to the NVIDIA NIM, which returns a 77-joint
-   3D skeleton per frame. This is the only step that leaves your machine.
+   3D skeleton per frame. This is the only stage that sends video off your
+   machine.
 5. **Features** estimates the camera's own rotation from the background,
    subtracts it, and integrates what is left — the rider's actual turn.
 6. **Review** in the browser, or take the CSV into a notebook, or open the
-   USD in Omniverse.
+   USD in Omniverse. The dashboard's coach is a Nemotron model on NVIDIA's
+   API, shown the measured numbers and their caveats, never the video.
 
 ## Architecture
 
@@ -54,6 +56,7 @@ flowchart TB
 
     subgraph CLOUD["NVIDIA CLOUD"]
         NIM["3D Body Pose NIM<br/>gRPC on NVCF · hosted, no local GPU"]
+        NEMO["Nemotron coach<br/>NVIDIA API · chat completions"]
     end
 
     POSES["poses.json · JSON Lines<br/>Nova-77 skeleton, every frame"]
@@ -78,10 +81,13 @@ flowchart TB
     POSES --> C --> CSV
     POSES --> D --> USDA
     POSES --> E --> W
+    E -- "measured numbers only" --> NEMO
+    NEMO -- "CoachReport, schema-checked" --> W
 ```
 
-The only thing that leaves your machine is the clip and its boxes, going to
-the NIM. Everything else — shot selection, tracking, the rotation maths, the
+Two things leave your machine: the clip and its boxes, going to the NIM, and,
+when you ask for coaching, the clip's measured numbers, going to Nemotron.
+Everything else — shot selection, tracking, the rotation maths, the
 dashboard — runs locally. Stages talk to each other only through files in
 `data/`, so any stage can be re-run on its own.
 
@@ -131,6 +137,11 @@ cd web && npm ci
 ../.venv/bin/python tools/export_session.py run1
 npm run dev
 ```
+
+For the live coach, run `snow serve` and start the dashboard with
+`VITE_API_BASE=http://127.0.0.1:8000 npm run dev`; **Re-run analysis** then
+asks Nemotron. Without it the panel shows a rule-based template and says so.
+[docs/coach.md](docs/coach.md) has the details.
 
 <small>A 24-second 1080p clip is about 19 seconds of inference.</small>
 
@@ -185,6 +196,7 @@ Read it before you quote a number.
 | [docs/rotation.md](docs/rotation.md) | camera compensation and the three rotation measures |
 | [docs/usd.md](docs/usd.md) | USD / Omniverse export |
 | [docs/validation.md](docs/validation.md) | what is proven and what is not |
+| [docs/coach.md](docs/coach.md) | the Nemotron coach: what it sees, what it may return |
 | [docs/training.md](docs/training.md) | **planned:** how the models would be trained |
 | [web/README.md](web/README.md) | the review dashboard |
 | [AGENTS.md](AGENTS.md) | architecture map, for agents working on the code |
@@ -195,7 +207,7 @@ Read it before you quote a number.
 src/snow/           the pipeline, one module per stage
 web/                review dashboard (React) + session exporter
 docs/               the deep dives above
-tests/              34 tests, ~3s, no network and no GPU
+tests/              105 tests, ~20s, no network and no GPU
 scripts/setup.sh    venv, deps, vendored NVIDIA client
 vendor/             upstream NVIDIA gRPC client (cloned, gitignored)
 data/               clips, tracks, poses (gitignored)

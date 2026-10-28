@@ -102,7 +102,7 @@ flowchart TB
     subgraph SHIP["BACK INTO THE PIPELINE"]
         direction LR
         S1["replaces airborne_hint<br/>and the event detector"]
-        S2["coach panel<br/>Nebius AI Studio"]
+        S2["coach panel<br/>Nemotron · NVIDIA API"]
     end
 
     SRC --> P1

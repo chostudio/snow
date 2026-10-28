@@ -15,7 +15,9 @@ USD animation and a browser review dashboard come out.
 3D pose comes from the **NVIDIA 3D Body Pose NIM**, called over gRPC on
 NVIDIA's hosted NVCF endpoint. There is no local GPU and no model in this repo.
 Everything around the NIM — shot selection, encoding, tracking, framing,
-rotation maths, export, UI — is ours.
+rotation maths, export, UI — is ours. The dashboard's coach is a **Nemotron**
+model on NVIDIA's chat completions API, shown only the measured numbers
+(`src/snow/coach.py`, [docs/coach.md](docs/coach.md)).
 
 ## The shape of it
 
@@ -31,6 +33,7 @@ source video
                    ├─ features ── camera-compensated rotation → CSV/Parquet
                    ├─ usd ─────── UsdSkelAnimation for Omniverse, camera removed
                    └─ web/tools/export_session.py → the dashboard's bundle
+                        └─ coach / serve ── Nemotron over the bundle's numbers
 ```
 
 Stages talk to each other **only through files in `data/`**, keyed by a clip
@@ -53,6 +56,8 @@ alone. That is the main reason the pipeline is debuggable, so preserve it.
 | `src/snow/skeleton.py` | Nova-77 parent hierarchy. 19 lines, read it directly | — |
 | `src/snow/meta.py` | per-clip metadata (`fps`, `slowmo_factor`, crop plan) | — |
 | `src/snow/config.py` | paths, endpoint settings, `.env` loading | — |
+| `src/snow/coach.py` | Nemotron on the NVIDIA API over a bundle's measurements; schema-checked `CoachReport` | [docs/coach.md](docs/coach.md) |
+| `src/snow/serve.py` | `snow serve`: the dashboard's routes plus `POST /<name>/coach`, stdlib only | [docs/coach.md](docs/coach.md) |
 | `src/snow/cli.py` | argparse surface for every stage | — |
 | `src/snow/synth/` | synthetic tricks with exact labels: Nova-77 rider in Blender, renders, comparison | [docs/synthetic.md](docs/synthetic.md) |
 | `web/` | review dashboard + session exporter | [web/README.md](web/README.md) |
@@ -87,7 +92,7 @@ Everything under `data/` is gitignored. For a clip named `run1`:
 | `data/poses/run1.camera.npz` | features, usd | cached camera track |
 | `data/poses/run1.features.{csv,parquet,json}` | features | the measurements |
 | `data/poses/run1.usda` | usd | the skeletal animation |
-| `web/public/sessions/run1/` | `export_session.py` | `session.json` + `clip.mp4` |
+| `web/public/sessions/run1/` | `export_session.py` | `session.json` + `clip.mp4`; `--coach nemotron` bakes in a real coach report |
 | `data/synth/<clip>/` | `snow synth` | trick, exact labels, ground truth, scene USD, render |
 | `data/poses/<clip>-oracle.*` | `snow synth prepare` | ground truth in the NIM's schema, through `features` |
 
@@ -139,6 +144,10 @@ expose it in the process list to every user on the machine.
 `src/snow/_nim_launcher.py` works around this by injecting it into `sys.argv`
 after the process has started. Keep that property.
 
+The coach (`src/snow/coach.py`) uses the same key against NVIDIA's chat
+completions API, read from the environment and sent only in the
+`Authorization` header. It is never logged or put in an error message.
+
 Before any commit, grep the staged diff:
 
 ```bash
@@ -150,7 +159,7 @@ git diff --cached | grep -niE "nvapi-|api[_-]key|secret|bearer"
 ```bash
 source .venv/bin/activate
 snow doctor                 # tools, packages, vendored client, endpoint, key
-python -m pytest -q         # 81 tests, ~20s, no network and no GPU
+python -m pytest -q         # 105 tests, ~20s, no network and no GPU
 ```
 
 The venv is pinned to **Python 3.12**: the NVIDIA client supports 3.10–3.12
@@ -167,7 +176,7 @@ TypeScript and must stay console-clean.
 ### Testing
 
 Tests are fast, hermetic and run without the NIM. The suite is the real
-specification for eight things:
+specification for nine things:
 
 - `tests/test_bbox_format.py` — parses our annotation with **NVIDIA's own
   reader**, not a reimplementation of it.
@@ -190,6 +199,10 @@ specification for eight things:
 - `tests/test_synth.py` — synthetic tricks really have the inversions their
   names claim, labels are measured from motion, and ground truth in the NIM's
   schema obeys the same forward kinematics as the NIM's own output.
+- `tests/test_coach.py` — what Nemotron is shown (the spin count is
+  `spin_path_deg`, never `axis_spin_deg`; lengths uncalibrated; rates in the
+  clip's timebase unless `slowmo_factor` was set) and what it may send back
+  (exact `CoachReport` shape, one retry, then a loud failure). No network.
 
 When you change measurement code, add the synthetic case that pins the
 property, not a regression test against whatever number it printed today.

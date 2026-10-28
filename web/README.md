@@ -25,20 +25,33 @@ The UI never touches `src/snow/`. It reads one JSON bundle per clip, and
 | `GET /index.json` | the list of sessions |
 | `GET /<name>/session.json` | the bundle (`src/types.ts` is the contract) |
 | `GET /<name>/clip.mp4` | the video |
-| `POST /<name>/coach` *(optional)* | a `CoachReport` for one event |
+| `POST /<name>/coach` *(optional)* | a `CoachReport` for one event, from Nemotron |
 
-Static files under `public/sessions/` are the default. Set `VITE_API_BASE` to
-point at a real HTTP surface instead — nothing else in the UI changes.
+Static files under `public/sessions/` are the default. `snow serve` serves the
+same routes plus the live coach; point `VITE_API_BASE` at it and nothing else
+in the UI changes:
 
-Two stages are honestly marked as stand-ins in the header, and flip themselves
-to live when the real thing lands:
+```bash
+snow serve                                          # repo root, port 8000
+VITE_API_BASE=http://127.0.0.1:8000 npm run dev
+```
 
-- **Kinematics** — `tools/export_session.py` derives rotation, rates, axis tilt
-  and air segmentation for display. If `data/analysis/<name>.json` exists, its
-  `events` are used instead and the chip reads `snow-analyze`.
-- **Nemotron reasoning** — the coach panel renders a template over measured
-  numbers and says so. Implement `POST /<name>/coach` returning a `CoachReport`
-  and the panel renders that instead, badged with the model name.
+Two header chips say honestly where a number came from, and flip to live only
+when the real thing produced it:
+
+- **Kinematics**: without `snow features`, `tools/export_session.py` derives
+  rotation from the rider's body axis with the camera **not** subtracted, and
+  the chip stays a stand-in. With `data/poses/<name>.features.csv` it uses the
+  camera-compensated `spin_path_deg` and the chip reads *Camera-compensated
+  kinematics*.
+- **Coach**: the bundle carries a rule-based template, badged *Coach
+  (template)*. **Re-run analysis** posts to `POST /<name>/coach`; with
+  `snow serve` behind it a Nemotron model on the NVIDIA API answers, the
+  report is schema-checked, and the chip reads *Nemotron coach*. If the model
+  fails or returns an invalid report the panel shows the error rather than a
+  template. `export_session.py run1 --coach nemotron` bakes a real report into
+  the bundle so the static build has one too. See
+  [../docs/coach.md](../docs/coach.md).
 
 ## What the numbers mean
 
