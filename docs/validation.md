@@ -415,6 +415,109 @@ produced no air event, so dashboard columns count 18.
 | synth20_double_cork_1440 | oracle | 1440 | 1114 | 1097 | +745 | 1080 | cou / cou | 35 / 43 | 72 / 72 | 326 / 299 |
 | synth20_double_cork_1440 | pipeline | 1440 | 1114 | 430 | +237 | 360 | cou / cou | 35 / 31 | 72 / 160 | 326 / 124 |
 
+## Synthetic training set: 285 clips
+
+October 2026. The training set of [synthetic.md](synthetic.md#the-training-set):
+285 clips (`synthb0001`-`0285`), balanced across kind, spin 180-1440,
+direction, grab, camera position and slow motion 1-4x, rendered with Cycles
+on an AWS L4 and run through the **unchanged** pipeline against a
+self-hosted NIM. Two families: `short_ground` (146 clips, 61% of frames
+airborne, the first 20's short run-in) and `long_ground` (139 clips, 30%
+airborne: standing starts, long approaches, carving ride-outs). Scored by
+the same `snow synth compare` as the 20-clip table above, at the current
+code (fixed tracker, dashboard detector with one sense per air). Same
+columns and caveats as above; "right" columns are counts of clips with an
+air event.
+
+### Pipeline, by family
+
+| set | n | axis spin vs named | vertical yaw vs named | spin path over air vs named | spin path names it | spin path sense right | dashboard spin right | dashboard direction right | axis tilt | max tilt | camera rotation | takeoff (frames) | landing (frames) |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| long_ground | 139 | 234 | 318 | 196 | 57/137 | 126/137 | 58/135 | 123/135 | 17 | 31 | 214 | 29 | 27 |
+| short_ground | 146 | 217 | 299 | 207 | 54/146 | 137/146 | 58/146 | 139/146 | 14 | 27 | 131 | 32 | 31 |
+| validation | 20 | 165 | 297 | 180 | 11/20 | 19/20 | 13/20 | 20/20 | 19 | 24 | 116 | 12 | 15 |
+| **all** | 305 | 221 | 308 | 201 | 122/303 | 282/303 | 129/301 | 282/301 | 16 | 29 | 168 | 29 | 28 |
+
+### Oracle (exact skeleton, true camera), by family
+
+| set | n | axis spin vs named | vertical yaw vs named | spin path over air vs named | spin path names it | spin path sense right | dashboard spin right | dashboard direction right | axis tilt | max tilt | camera rotation | takeoff (frames) | landing (frames) |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| long_ground | 139 | 131 | 200 | 44 | 134/139 | 135/139 | 133/137 | 137/137 | 7 | 19 | 0 | 7 | 9 |
+| short_ground | 146 | 130 | 196 | 58 | 136/146 | 143/146 | 140/144 | 142/144 | 9 | 19 | 0 | 7 | 8 |
+| validation | 20 | 135 | 147 | 27 | 20/20 | 20/20 | 20/20 | 20/20 | 8 | 15 | 0 | 7 | 8 |
+| **all** | 305 | 131 | 195 | 50 | 290/305 | 298/305 | 293/301 | 299/301 | 8 | 19 | 0 | 7 | 8 |
+
+### Pipeline, by trick: short ground (big air, short run-in)
+
+| kind | n | axis spin vs named | vertical yaw vs named | spin path over air vs named | spin path names it | spin path sense right | dashboard spin right | dashboard direction right | axis tilt | max tilt | camera rotation | takeoff (frames) | landing (frames) |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| cork | 49 | 249 | 340 | 228 | 13/49 | 47/49 | 18/49 | 47/49 | 12 | 21 | 124 | 44 | 31 |
+| double_cork | 49 | 282 | 441 | 224 | 19/49 | 43/49 | 14/49 | 46/49 | 13 | 22 | 141 | 33 | 31 |
+| flat | 48 | 120 | 113 | 170 | 22/48 | 47/48 | 26/48 | 46/48 | 17 | 38 | 129 | 19 | 30 |
+| **all** | 146 | 217 | 299 | 207 | 54/146 | 137/146 | 58/146 | 139/146 | 14 | 27 | 131 | 32 | 31 |
+
+### Pipeline, by trick: long ground
+
+| kind | n | axis spin vs named | vertical yaw vs named | spin path over air vs named | spin path names it | spin path sense right | dashboard spin right | dashboard direction right | axis tilt | max tilt | camera rotation | takeoff (frames) | landing (frames) |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| cork | 46 | 219 | 272 | 174 | 20/45 | 42/45 | 19/45 | 40/45 | 13 | 18 | 213 | 22 | 32 |
+| double_cork | 47 | 323 | 516 | 245 | 17/46 | 42/46 | 17/46 | 40/46 | 13 | 23 | 213 | 35 | 32 |
+| flat | 46 | 157 | 163 | 170 | 20/46 | 42/46 | 22/44 | 43/44 | 25 | 51 | 218 | 30 | 16 |
+| **all** | 139 | 234 | 318 | 196 | 57/137 | 126/137 | 58/135 | 123/135 | 17 | 31 | 214 | 29 | 27 |
+
+### Pipeline, training set (285), by slow-motion factor
+
+| slowmo_factor | n | axis spin vs named | vertical yaw vs named | spin path over air vs named | spin path names it | spin path sense right | dashboard spin right | dashboard direction right | axis tilt | max tilt | camera rotation | takeoff (frames) | landing (frames) |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| 1.0 | 71 | 214 | 269 | 108 | 47/71 | 68/71 | 50/71 | 70/71 | 13 | 25 | 64 | 5 | 6 |
+| 2.0 | 71 | 197 | 265 | 196 | 22/71 | 69/71 | 26/71 | 67/71 | 14 | 30 | 150 | 14 | 20 |
+| 3.0 | 71 | 241 | 385 | 253 | 21/70 | 62/70 | 23/70 | 62/70 | 17 | 25 | 210 | 37 | 35 |
+| 4.0 | 72 | 249 | 316 | 253 | 21/71 | 64/71 | 17/69 | 63/69 | 19 | 36 | 261 | 67 | 55 |
+| **all** | 285 | 225 | 308 | 202 | 111/283 | 263/283 | 116/281 | 262/281 | 16 | 29 | 172 | 31 | 29 |
+
+### Pipeline, training set (285), by camera position
+
+| camera_angle | n | axis spin vs named | vertical yaw vs named | spin path over air vs named | spin path names it | spin path sense right | dashboard spin right | dashboard direction right | axis tilt | max tilt | camera rotation | takeoff (frames) | landing (frames) |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| back_quarter | 72 | 255 | 388 | 233 | 28/72 | 63/72 | 29/71 | 63/71 | 20 | 29 | 150 | 30 | 38 |
+| front_quarter | 70 | 217 | 320 | 183 | 24/68 | 63/68 | 27/68 | 62/68 | 13 | 30 | 136 | 25 | 25 |
+| low_landing | 72 | 199 | 252 | 145 | 30/72 | 71/72 | 28/72 | 70/72 | 14 | 28 | 155 | 42 | 24 |
+| side | 71 | 230 | 273 | 247 | 29/71 | 66/71 | 32/70 | 67/70 | 16 | 27 | 246 | 25 | 27 |
+| **all** | 285 | 225 | 308 | 202 | 111/283 | 263/283 | 116/281 | 262/281 | 16 | 29 | 172 | 31 | 29 |
+
+### Findings
+
+1. **The 20-clip headline does not hold at scale.** The dashboard names the
+   spin on 13 of 20 validation clips but **116 of 281** (41%) training-set
+   clips with an air event; the sense is right on 262 of 281 (93%). Flat
+   spins fare best (48/92 across both families), corks and double corks
+   about a third (37/94, 31/95). The 20 were a lucky, narrow sample: four
+   double cork 1080s and no 180s, 1260 corks or 900 double corks.
+2. **The definitions still hold on exact poses.** Through the oracle the
+   spin path over the air names 290 of 305 and the dashboard 293 of 301.
+   So the gap is perception (NIM plus `camera.py`), as before.
+3. **Slow motion is now the clearest predictor of failure**: 50 of 71
+   named at 1x, 17 of 69 at 4x. The misses go both ways (at 4x, 22 over and
+   30 under), takeoff error grows from 5 to 67 frames and camera-rotation
+   error from 64 to 261 degrees. A slowed clip has k times the frames for the
+   same turn, so whatever error accrues per frame (pose jitter in the path,
+   camera jitter) grows k times against an unchanged total. Measured, not
+   yet diagnosed; it is the first thing to look at before trusting a count
+   on broadcast slow motion.
+4. **Long ground time adds false airs through the pipeline.** The oracle
+   finds exactly one air on 281 of 285 clips. Through the pipeline the
+   dashboard's detector finds more than one on 49 of 139 `long_ground`
+   clips (up to five) and 31 of 146 `short_ground`: carving and jitter on
+   the snow read as rotation. This is the case the learned airborne
+   segmenter is for; the heuristic detector is not a ground truth for it.
+   Spin and direction are no worse on long ground (58/135 named against
+   58/146).
+5. **Camera position matters little**: 27-32 named per ~70 clips for every
+   position. Camera-rotation error is largest from the side (246 degrees).
+
+No pipeline run failed on any of the 285 clips, and every clip has an air
+event on the oracle except four.
+
 ## Claims you may not make
 
 - that a spin count is correct in absolute terms
