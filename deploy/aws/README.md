@@ -26,8 +26,9 @@ only way in.
   `s3://snow-artifacts-009160029345/spend/<YYYY-MM>.txt` and powers off at
   $85/month of compute (the $100 budget minus EBS and S3). Shared by every
   snow GPU instance, so a later `g6e` render box counts against the same cap.
-- **idle-stop**: powers off after 30 min with no SSH connection and the GPU
-  under 5%.
+- **idle-stop**: powers off after 30 min with the GPU under 5%, the 1-min
+  load under 1.0 and no keystroke in an interactive shell. An open SSH
+  connection or tunnel alone does not keep the box up.
 
 Power-off means *stopped*, not terminated: the 100 GB volume (~$8/month) stays.
 

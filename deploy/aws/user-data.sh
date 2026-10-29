@@ -35,10 +35,15 @@ METER
 cat > /usr/local/bin/snow-idle-stop <<'IDLE'
 #!/bin/bash
 # Counts consecutive idle 5-minute checks; 6 in a row (30 min) powers off.
+# Busy means real work: the GPU in use, the CPU loaded (a render or a batch
+# job), or a keystroke in an interactive shell within 30 min. An open SSH
+# connection alone is not busy: a forgotten tunnel or ControlMaster socket
+# once kept a box up for four idle hours.
 STATE=/var/lib/snow-idle-count
-ssh_conns=$(ss -Htn state established '( sport = :22 )' | wc -l)
 gpu_util=$(nvidia-smi --query-gpu=utilization.gpu --format=csv,noheader,nounits | sort -n | tail -1)
-if [ "$ssh_conns" -eq 0 ] && [ "${gpu_util:-0}" -lt 5 ]; then
+load_busy=$(awk '{print ($1 >= 1.0)}' /proc/loadavg)
+typed=$(find /dev/pts -name '[0-9]*' -amin -30 2>/dev/null | wc -l)
+if [ "${gpu_util:-0}" -lt 5 ] && [ "$load_busy" -eq 0 ] && [ "$typed" -eq 0 ]; then
   n=$(( $(cat $STATE 2>/dev/null || echo 0) + 1 ))
 else
   n=0
