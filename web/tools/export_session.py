@@ -37,7 +37,8 @@ import numpy as np
 REPO = Path(__file__).resolve().parents[2]
 WEB = REPO / "web"
 sys.path.insert(0, str(REPO / "src"))
-from snow.skeleton import LINKS, PARENTS  # noqa: E402  (after sys.path edit)
+from snow import features as snow_features  # noqa: E402  (after sys.path edit)
+from snow.skeleton import LINKS, PARENTS  # noqa: E402
 
 # Nova-77 indices this UI names. Handedness follows the skeleton's own index
 # order; every displayed metric is built to be symmetric so a swapped L/R
@@ -77,6 +78,11 @@ MERGE_GAP_FRAMES = 10
 # one shot. The tracker still loses an inverted rider for 10-20 frames at a
 # time, and ending the air there split one trick into two.
 HOLE_FRAMES = 20
+# With the body orientation available, a hole may also be this many of the
+# clip's own chord spans (``features.robust_speed``): a slowed clip loses
+# the inverted rider for k times the frames, and 20 frames at 4x is five
+# real ones.
+HOLE_SPANS = 4
 # Rotation against the air's sense at either end, read by both the signed
 # path and the vertical yaw, is a wind-up or a landing check, not the trick;
 # past this much it is trimmed off.
@@ -168,6 +174,7 @@ def load_features(name: str) -> tuple[dict[int, dict], str, str] | None:
         spin = row.get("spin_deg")
         yaw = float(spin) if spin is not None and spin == spin else yaw
         path = row.get("rotation_deg")
+        quat = [row.get(c) for c in snow_features.ORIENTATION_COLUMNS]
         prob = row.get("airborne_prob")
         learned = prob is not None and prob == prob  # NaN-safe
         out[int(row["frame_id"])] = {
@@ -180,6 +187,10 @@ def load_features(name: str) -> tuple[dict[int, dict], str, str] | None:
             "segment": int(row.get("segment", 0) or 0),
             "axis_tilt": float(tilt) if tilt == tilt else 0.0,
             "camera_cum": camera_cum,
+            # Camera-compensated body orientation, for counting the spin
+            # (``features.spin_count_deg``); absent in an older table.
+            **({"q": [float(v) for v in quat]}
+               if all(v is not None and v == v for v in quat) else {}),
             # The learned segmenter's call, when `snow features` ran with
             # weights (docs/segmenter.md); absent, the rate detector decides.
             **({"airborne": bool(row.get("airborne_hint"))} if learned else {}),
@@ -258,7 +269,19 @@ def compute_rates(recs: list[dict], real_fps: float) -> None:
     so conformed slow motion cannot inflate them.
 
     ``rpm`` is the signed rate of the displayed rotation; ``speed`` is the
-    unsigned rate of the angular path, which is what finds an air."""
+    unsigned turn rate, which is what finds an air. With the body
+    orientation in the table, ``speed`` is read over a chord set by the
+    clip's own turn rate (``features.robust_speed``) rather than five
+    frames: on slow motion the five-frame rate is mostly pose jitter, which
+    set the peak the gates scale from and broke airs apart."""
+    oriented = bool(recs) and all("q" in r for r in recs)
+    if oriented:
+        speed, chord = snow_features.robust_speed(
+            np.array([r["q"] for r in recs]), np.array([r["f"] for r in recs]),
+            np.array([r.get("segment", 0) for r in recs]))
+        for r, value in zip(recs, speed):
+            r["chord_speed"] = float(value) * real_fps / 6.0 if value == value else 0.0
+            r["hole"] = max(HOLE_FRAMES, HOLE_SPANS * chord)
     unsigned = all("path" in r for r in recs)
     for i, r in enumerate(recs):
         lo, hi = i, i
@@ -269,7 +292,9 @@ def compute_rates(recs: list[dict], real_fps: float) -> None:
         span = recs[hi]["f"] - recs[lo]["f"]
         dps = (recs[hi]["rotation"] - recs[lo]["rotation"]) / (span / real_fps) if span else 0.0
         r["rpm"] = dps / 360 * 60
-        if unsigned:
+        if oriented:
+            r["speed"] = r["chord_speed"]
+        elif unsigned:
             path_dps = (recs[hi]["path"] - recs[lo]["path"]) / (span / real_fps) if span else 0.0
             r["speed"] = path_dps / 360 * 60
         else:
@@ -279,7 +304,7 @@ def compute_rates(recs: list[dict], real_fps: float) -> None:
 def adjacent(recs: list[dict], i: int, j: int) -> bool:
     """True when j follows i across at most a short hole, inside the same
     camera shot."""
-    return (0 < recs[j]["f"] - recs[i]["f"] <= HOLE_FRAMES
+    return (0 < recs[j]["f"] - recs[i]["f"] <= recs[i].get("hole", HOLE_FRAMES)
             and recs[i].get("segment") == recs[j].get("segment"))
 
 
@@ -301,7 +326,8 @@ def _sense(inside: list[dict]) -> float:
     return 1.0
 
 
-def _trim_counter_turn(recs: list[dict], lo: int, hi: int, sense: float) -> tuple[int, int]:
+def _trim_counter_turn(recs: list[dict], lo: int, hi: int, sense: float,
+                       core: tuple[int, int] | None = None) -> tuple[int, int]:
     """Drop a wind-up before the air and a check after it.
 
     Growth reads the unsigned path, so it runs on into a rider winding up
@@ -309,19 +335,35 @@ def _trim_counter_turn(recs: list[dict], lo: int, hi: int, sense: float) -> tupl
     opens with 170 degrees of it). A stretch at either end is cut only when
     the signed path and the vertical yaw both turn against the air: through
     an inversion either one alone can read backwards while the trick goes on.
+
+    With the body orientation in the table (the chord count), the yaw must
+    turn back by ``COUNTER_TURN_DEG`` too, not merely some amount: the
+    signed path sums every frame's jitter, so on slow motion it passes the
+    threshold by noise alone, and a yaw a few degrees back trimmed real air.
+    The yaw is an angle, not a sum, so its noise does not grow with frames.
+    For the same reason a cut is then looked for only outside ``core``, the
+    frames whose speed passed the enter gate: a wind-up is what growth adds
+    around the spin, and the spin's own frames are not trimmed however the
+    signed path reads them (inverted, it can read backwards for a stretch).
     """
     def against(i: int, j: int) -> bool:
         turned = sense * (recs[j]["rotation"] - recs[i]["rotation"])
         if turned > -COUNTER_TURN_DEG:
             return False
-        return "yaw" not in recs[i] or sense * (recs[j]["yaw"] - recs[i]["yaw"]) < 0
+        if "yaw" not in recs[i]:
+            return True
+        yaw_back = sense * (recs[j]["yaw"] - recs[i]["yaw"])
+        return yaw_back <= -COUNTER_TURN_DEG if "q" in recs[i] else yaw_back < 0
 
+    first, last = core if core is not None else (hi, lo)
     signed = [sense * recs[k]["rotation"] for k in range(lo, hi + 1)]
-    low = lo + int(np.argmin(signed))
+    reach = max(first, lo) - lo + 1 if core is not None else len(signed)
+    low = lo + int(np.argmin(signed[:reach]))
     if low > lo and against(lo, low):
         lo = low
     signed = signed[lo - (hi + 1 - len(signed)):]
-    high = lo + int(np.argmax(signed))
+    start = min(max(last, lo), hi) - lo if core is not None else 0
+    high = lo + start + int(np.argmax(signed[start:]))
     if high < hi and against(high, hi):
         hi = high
     return lo, hi
@@ -359,8 +401,14 @@ def find_events(recs: list[dict], real_fps: float, fps: float,
     by_f = {r["f"]: r for r in recs}
     speeds = [r["speed"] for r in recs]
     peak = float(np.percentile(speeds, PEAK_PERCENTILE))
-    enter = max(RPM_ENTER_FLOOR, ENTER_FRACTION * peak)
-    leave = max(RPM_EXIT_FLOOR, EXIT_FRACTION * peak)
+    # The floors are in real-time RPM, which slow motion silently divides
+    # (the lesson of the 18 RPM gate, docs/validation.md): on synthetic 4x
+    # clips the exit floor cut real air off. With the chord speed, jitter no
+    # longer lifts a still clip's rate, so the floors are not applied and
+    # MIN_NET_ROTATION_DEG alone rejects a clip holding no trick.
+    oriented = all("q" in r for r in recs)
+    enter = max(0.0 if oriented else RPM_ENTER_FLOOR, ENTER_FRACTION * peak)
+    leave = max(0.0 if oriented else RPM_EXIT_FLOOR, EXIT_FRACTION * peak)
 
     # Cores: runs over the enter gate, bridged across brief tracking dropouts.
     cores: list[list[int]] = []
@@ -381,31 +429,43 @@ def find_events(recs: list[dict], real_fps: float, fps: float,
     # of a corked spin can read backwards for a stretch, and stopping there
     # split one air into two.
     spans: list[list[int]] = [] if not use_segmenter else segmenter_spans(recs)
+    core_of: list[tuple[int, int]] = []
     for a, b in ([] if use_segmenter else cores):
+        core = (a, b)
         while a > 0 and adjacent(recs, a - 1, a) and recs[a - 1]["speed"] >= leave:
             a -= 1
         while b < len(recs) - 1 and adjacent(recs, b, b + 1) and recs[b + 1]["speed"] >= leave:
             b += 1
         if spans and a <= spans[-1][1]:  # two cores grew into one another
             spans[-1][1] = max(spans[-1][1], b)
+            core_of[-1] = (core_of[-1][0], core[1])
         else:
             spans.append([a, b])
+            core_of.append(core)
 
     events = []
-    for lo, hi in spans:
+    for n, (lo, hi) in enumerate(spans):
         sense = _sense(recs[lo:hi + 1])
         if not use_segmenter:
             # The segmenter was trained on true takeoffs, so a wind-up is
             # already outside its air; only the rate detector's growth needs
             # trimming back.
-            lo, hi = _trim_counter_turn(recs, lo, hi, sense)
+            lo, hi = _trim_counter_turn(recs, lo, hi, sense,
+                                        core_of[n] if oriented else None)
         inside = recs[lo:hi + 1]
         start, end = inside[0]["f"], inside[-1]["f"]
         if len(inside) < MIN_AIR_FRAMES:
             continue
         sense = _sense(inside)
+        path_rot = None
         if all("path" in r for r in inside):
-            rot = sense * (inside[-1]["path"] - inside[0]["path"])
+            path_rot = sense * (inside[-1]["path"] - inside[0]["path"])
+        if all("q" in r for r in inside):
+            # The count: chords about 90 degrees of turn apart, so pose
+            # jitter is not summed once per frame (``features.spin_count_deg``).
+            rot = sense * snow_features.spin_count_deg(np.array([r["q"] for r in inside]))
+        elif path_rot is not None:
+            rot = path_rot
         else:
             rot = inside[-1]["rotation"] - inside[0]["rotation"]
         if abs(rot) < MIN_NET_ROTATION_DEG:
@@ -434,6 +494,9 @@ def find_events(recs: list[dict], real_fps: float, fps: float,
             "metrics": {
                 "rotation_deg": round(rot, 1),
                 "nearest_spin_deg": int(round(abs(rot) / 180.0) * 180),
+                # The frame-to-frame angular path over the same air, the
+                # count before chords replaced it; kept for comparison.
+                **({"path_rotation_deg": round(path_rot, 1)} if path_rot is not None else {}),
                 # Sign is the right-hand rule about world up when the rotation
                 # comes from `snow features` (counter-clockwise from above is
                 # positive), about the rider's own up axis in the display

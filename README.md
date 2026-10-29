@@ -192,9 +192,13 @@ not yet.**
 - On synthetic motion the maths is exact — a known 1080 about a known axis
   comes back as 1080, within 2°.
 - On real footage, absolute spin counts are **unvalidated**. On a clip from a
-  video titled *"Frontside Double Cork 1080"* the pipeline reads 668°. It has
-  not been established that the shot the scout picked is the trick the title
-  names, so that is an open question rather than a known error rate.
+  video titled *"Frontside Double Cork 1080"* the pipeline reads 720 (667°
+  over its detected air). It has not been established that the shot the
+  scout picked is the trick the title names, nor where its air starts, so
+  that is an open question rather than a known error rate.
+- On 96 held-out synthetic clips the dashboard names the spin on 67, at any
+  slow motion, without being told the factor; with exact poses, 96. The gap
+  is the pose model's error.
 - Metric scale is uncalibrated — the focal length is assumed. Exported
   skeletons come out about 1.2 m tall. Angles and ratios hold; metres do not.
 

@@ -42,8 +42,9 @@ when the real thing produced it:
 - **Kinematics**: without `snow features`, `tools/export_session.py` derives
   rotation from the rider's body axis with the camera **not** subtracted, and
   the chip stays a stand-in. With `data/poses/<name>.features.csv` it uses the
-  camera-compensated `spin_path_deg` and the chip reads *Camera-compensated
-  kinematics*.
+  camera-compensated `spin_path_deg` for the curve, counts each air with
+  `features.spin_count_deg` over the body orientation, and the chip reads
+  *Camera-compensated kinematics*.
 - **Coach**: the bundle carries a rule-based template, badged *Coach
   (template)*. **Re-run analysis** posts to `POST /<name>/coach`; with
   `snow serve` behind it a Nemotron model on the NVIDIA API answers, the
@@ -81,6 +82,19 @@ of up to 20 frames; its sense is read once per air from net vertical yaw, and
 a turn the other way at either end (a wind-up) is trimmed off. Reading the
 sense frame by frame split synthetic corks wherever the pipeline read a
 stretch backwards ([../docs/validation.md](../docs/validation.md)).
+
+When the features table carries the body orientation (`body_q*`, written by
+`snow features` since the slow-motion fix), the air is found and counted
+differently: the rate is read over a chord whose span the clip's own turn
+sets (`features.robust_speed`), pose holes are followed for up to four such
+spans, the RPM floors are not applied, a wind-up is trimmed only outside the
+air's fast core, and the air's size is `features.spin_count_deg` rather than
+the frame-to-frame path, which is kept as `path_rotation_deg`. The
+frame-to-frame path summed pose jitter once per frame, so slow motion read
+high; on 96 held-out synthetic clips the called spin went from 40 right to 67
+([../docs/rotation.md](../docs/rotation.md#counting-a-spin-through-pose-jitter)).
+An older table without those columns gets the old behaviour; re-run `snow
+features` (no NIM call) to switch.
 When `snow features` ran with segmenter weights its table carries
 `airborne_prob`, and the exporter then takes the learned segmenter's airs
 instead (`--air rate` refuses them; `source.air_detector` records which).
