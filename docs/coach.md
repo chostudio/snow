@@ -38,8 +38,11 @@ renamed so its name carries its caveat:
 | `peak_rpm`, `air_time_s`, `rotation_decay_dps2` | `..._clip_timebase`, or `..._real_time` only if `slowmo_factor` was set |
 | `pop_height_m`, `min_tuck_radius_m` | `..._uncalibrated`, no unit |
 
-Per-shot summaries from `data/poses/<name>.features.json` go in too, with
-`spin_path_deg` as the count. **`axis_spin_deg` is left out on purpose**:
+Per-shot summaries from `data/poses/<name>.features.json` go in too, but
+with **no spin count**: the per-air `spin_count_deg` above is the only one.
+`spin_path_deg` is left out because, summed frame to frame over the whole
+shot, it accrues pose and camera jitter and over-reads, most of all on slow
+motion ([rotation.md](rotation.md)). **`axis_spin_deg` is left out too**:
 synthetic tricks showed it undercounts corks even on exact poses
 ([validation.md](validation.md)), and offering two spin counts invites the
 model to quote the wrong one. Vertical yaw (`net_spin_deg`) stays out for the

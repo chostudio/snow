@@ -45,11 +45,13 @@ LENGTH_UNITS = {"m", "metre", "metres", "meter", "meters", "cm", "ft", "feet"}
 # absent: synthetic tricks with exact labels showed it undercounts corks even
 # on perfect poses, and handing the model two spin counts invites it to pick
 # the wrong one. `net_spin_deg` / `peak_spin_deg` (vertical yaw) degenerate
-# when the rider is inverted, so they stay out too.
+# when the rider is inverted, so they stay out too. `spin_path_deg` is out for
+# the same reason: summed frame to frame over the whole shot, it accrues pose
+# and camera jitter and over-reads against the per-air chord count
+# (`spin_count_deg`, docs/rotation.md), most of all on slow motion.
 SEGMENT_FIELDS = {
     "segment": "segment",
     "frames": "frames",
-    "spin_path_deg": "spin_path_deg",
     "total_rotation_deg": "total_angular_path_deg",
     "max_tilt_deg": "max_body_tilt_deg",
     "camera_rotation_deg": "camera_rotation_removed_deg",
@@ -144,7 +146,7 @@ def caveats(data: dict) -> list[str]:
     """docs/validation.md's "Claims you may not make", applied to this clip."""
     out = [
         "Spin counts are UNVALIDATED in absolute terms on real footage. spin_count_deg "
-        "(and spin_path_deg per shot) is the measured count; never state that the rider "
+        "(per air) is the only measured count; never state that the rider "
         "landed a named spin (\"a 1080\"). Say what was measured and treat nearest_180_deg "
         "as a rounding, not a call.",
         "Lengths (*_uncalibrated) are camera-relative in unknown units because the focal "

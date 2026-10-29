@@ -62,10 +62,13 @@ def _good(**over) -> dict:
 
 # What the model sees -------------------------------------------------------
 
-def test_prompt_counts_spin_path_and_never_axis_spin():
+def test_prompt_counts_per_air_only_never_shot_paths_or_axis_spin():
     data = C.measurements(_session(), SEGMENTS)
     text = json.dumps(C.build_messages(data))
-    assert "spin_path_deg" in text and "1111.7" in text
+    # The per-air chord count is the only spin count offered; the whole-shot
+    # frame-to-frame path over-reads on jitter, so it stays out.
+    assert "spin_count_deg" in text
+    assert "spin_path_deg" not in text
     assert "axis_spin_deg" not in text and "962.0" not in text
     # Vertical yaw degenerates when inverted; it is not offered as a count either.
     assert "net_spin_deg" not in text and "650.8" not in text

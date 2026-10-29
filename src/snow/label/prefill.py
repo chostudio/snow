@@ -33,9 +33,9 @@ import numpy as np
 
 from .. import config as cfg
 
-S3_SEGMENTER = "s3://snow-artifacts-009160029345/models/segmenter/weights/segmenter_scale154.pt"
+S3_SEGMENTER = "s3://snow-artifacts-009160029345/models/segmenter/weights/segmenter_noise304.pt"
 S3_CLASSIFIER = "s3://snow-artifacts-009160029345/models/classifier/classifier.pt"
-FETCHED_SEGMENTER = cfg.DATA_DIR / "models" / "segmenter" / "weights" / "segmenter_scale154.pt"
+FETCHED_SEGMENTER = cfg.DATA_DIR / "models" / "segmenter" / "weights" / "segmenter_noise304.pt"
 FETCHED_CLASSIFIER = cfg.DATA_DIR / "models" / "classifier" / "classifier.pt"
 CACHE_VERSION = 1
 
@@ -57,7 +57,7 @@ def segmenter_weights(choice: str | None = None) -> Path | None:
     env = os.environ.get("SNOW_SEGMENTER")
     candidates = [Path(env)] if env else []
     candidates += [cfg.WEIGHTS_DIR / "segmenter.pt", FETCHED_SEGMENTER,
-                   cfg.DATA_DIR / "models" / "segmenter" / "segmenter_scale154.pt"]
+                   cfg.DATA_DIR / "models" / "segmenter" / "segmenter_noise304.pt"]
     return next((p for p in candidates if p.exists()), None)
 
 
