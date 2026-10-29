@@ -98,7 +98,9 @@ Two variants of every clip:
   here is what a user sees.
 
 **What this is not.** Renders are Blender EEVEE with plain materials, not
-Omniverse Replicator (written, not yet run on an RTX machine), and the corks
+Omniverse Replicator (30 Replicator renders of the same scenes as Cycles
+clips read worse: spin count names 15/30 against 23/30, corks hit hardest;
+[synthetic.md](synthetic.md#isaac-replicator-against-blender-cycles-same-30-scenes)), and the corks
 are one generated family of motions. Synthetic accuracy is not a claim about
 broadcast footage; synthetic *failure* is still a failure, and every finding
 below has a mechanism that does not depend on rendering style.

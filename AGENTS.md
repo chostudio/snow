@@ -80,8 +80,11 @@ not built. Its
 **Synthetic ground truth in Omniverse** section is now built, as
 `snow synth` ([docs/synthetic.md](docs/synthetic.md)): parametric tricks on a
 rider rigged as the NIM's own 77-joint skeleton, rendered and run through the
-unchanged pipeline. The published table comes from Blender renders; the
-Replicator renderer is written but has not run on an RTX machine yet.
+unchanged pipeline. The published table comes from Blender renders. The
+Omniverse Replicator renderer has run (Isaac Sim 6.2 on an L4): 30 scenes
+re-rendered from the Cycles set read clearly worse through the pipeline
+(spin count names 15/30 against 23/30), closer to real footage's NIM
+confidence; see docs/synthetic.md.
 
 ## Artifacts on disk
 
@@ -219,6 +222,10 @@ specification for these things:
 - `tests/test_synth.py` — synthetic tricks really have the inversions their
   names claim, labels are measured from motion, and ground truth in the NIM's
   schema obeys the same forward kinematics as the NIM's own output.
+- `tests/test_fidelity.py` — the renderer-comparison scores: the NIM's
+  scale, a rotation and an offset are not articulation error, a mirrored
+  body is, out-of-view frames are not misses, 2D error is relative to the
+  rider's size.
 - `tests/test_coach.py` — what Nemotron is shown (the spin count is
   `spin_path_deg`, never `axis_spin_deg`; lengths uncalibrated; rates in the
   clip's timebase unless `slowmo_factor` was set) and what it may send back

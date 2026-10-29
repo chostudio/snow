@@ -10,6 +10,7 @@ snow synth render      # headless Blender: rig, animate, venue, camera, GT, USD,
 snow synth prepare     # GT in the NIM's schema + the "oracle" run through snow features
 snow synth pipeline    # the unchanged pipeline on each render (hosted NIM: calls spaced 120 s)
 snow synth compare     # error tables, per kind and per camera angle
+snow synth fidelity    # how the NIM reads each render: detection, confidence, 2D and 3D joint error
 
 snow synth plan --scale 400 --seed 1           # the training set: synthb0001.. (see below)
 snow synth render --engine cycles --only synthb0001   # GPU render on a headless Linux box
@@ -30,8 +31,9 @@ be re-run alone, for all clips or `--only synth14`.
   context there and falls back to software GL), an ffmpeg new enough for
   `-fps_mode` (5.1+; Ubuntu 22.04 ships 4.4), and `LD_LIBRARY_PATH` unset
   on AWS Deep Learning AMIs, whose system cuDNN breaks torch's.
-- For the Omniverse render: a Linux machine with an **RTX** GPU (L40S, RTX
-  6000 Ada, A6000, 4090; not H100/A100, which have no RT cores) and Isaac Sim.
+- For the Omniverse render: a Linux machine with an **RTX** GPU and Docker
+  with the NVIDIA container toolkit, for the Isaac Sim container. Run on
+  an L4; not an H100/A100 (no RT cores), and an A10G crashed (see below).
 
 ## The rider is rigged as the NIM's skeleton
 
@@ -159,15 +161,164 @@ The gap between them is what perception (NIM plus camera estimate) adds.
 Blender authors everything, and `scene.usdc` carries it: the Nova-77
 skeleton and skin, its animation, the venue and the animated camera (focal
 in USD's tenths of a scene unit). `synth/replicator_render.py` renders that
-stage on an RTX machine with Replicator, real-time ray traced or path traced,
-with motion blur and Replicator's `camera_params` written per frame as an
-independent check on the camera ground truth. Then
-`snow synth encode --renderer replicator` and the remaining steps run
-unchanged; the labels do not change, because it is the same stage.
+stage with Omniverse Replicator inside the Isaac Sim container. The labels
+do not change, because it is the same stage: a clip re-exported from the
+same `trick.json` reproduces the Blender clip's `gt_raw.npz` to 1e-5 m.
 
-**Unverified**: no RTX machine was available. The first Replicator render
-must go through `prepare` and agree with the Blender ground truth before
-its numbers are used.
+**It ran** (October 2026) on Isaac Sim 6.2.0 on an AWS `g6.xlarge` (L4):
+30 clips, `synthi0001` to `synthi0030`, each the same scene as a Cycles
+clip of the training set, so the two renderers are compared pair by pair.
+
+```bash
+# on the Mac (Blender + MPFB): rig, venue, camera, ground truth, scene.usdc; no render
+blender -b --python src/snow/synth/blender/run.py -- data/synth/synthi0001_... --no-render
+snow synth prepare --only synthi                 # ground truth + oracle, as for Blender clips
+
+# on the GPU box: Isaac Sim's own Python in the NGC container, headless
+docker login nvcr.io -u '$oauthtoken'            # key from SSM /app/snow/NVIDIA_API_KEY
+docker run --rm --gpus all --network host -e ACCEPT_EULA=Y -e PRIVACY_CONSENT=Y \
+  -v ~/snow:/snow -u 1234:1234 --entrypoint /isaac-sim/python.sh \
+  nvcr.io/nvidia/isaac-sim:6.2.0 /snow/src/snow/synth/replicator_render.py \
+  /snow/data/synth/synthi0001_... [more clips] --blur 4 --subframes 2
+snow synth encode --renderer replicator --only synthi0001   # renderer.txt: isaac-replicator
+
+# then the unchanged pipeline, against a self-hosted NIM
+SNOW_NIM_PREVIEW=0 SNOW_NIM_TARGET=127.0.0.1:18021 snow synth pipeline --only synthi
+```
+
+Mount Isaac's cache directories too (`/isaac-sim/.cache`,
+`/isaac-sim/.nv/ComputeCache`, ...), owned by uid 1234, or it starts cold.
+One Isaac process renders a list of clips: RTX compiles its shaders for
+about 7 minutes on the box's 4 vCPUs at the first frame, then never again.
+
+What the render does, all on the session layer so `scene.usdc` is never
+rewritten:
+
+- **Daylight for a broadcast.** Blender's lights arrive in Blender's units
+  (a sun of about 1.2, a grey world of 0.35), which RTX reads as near
+  darkness. The sun is set to 3000, the dome to a 800 sky blue; nothing
+  that moves changes.
+- **Motion blur accumulated, not post-processed**: each frame averages 4
+  full RTX renders across the same half-frame shutter the Blender render
+  uses (frame `f` exposes `f - 0.25` to `f + 0.25` of scene time, which is
+  the slow-motion rate), in linear light. The rider, the board and the pan
+  smear as they moved; with 4 samples a fast limb shows as steps, not a
+  streak.
+- RTX real-time (`RaytracedLighting`), 2 subframes per sample, fixed
+  exposure, ACES tone map.
+
+Two things in Blender's USD export had to be fixed in `blender/run.py`
+before the stage rendered like the Blender scene (neither changes the
+Blender render):
+
+- **The rider wore a skirt.** MPFB's base mesh carries helper geometry
+  (skirt, tights, joint markers) that a Mask modifier hides; Blender exports
+  a skinned mesh without its modifiers, so in USD the helpers come back.
+  The masked vertices (5,778) are deleted before the export.
+- **The venue was white.** The venue's checker, brick, wave and noise
+  textures are procedural nodes, which the exporter drops, leaving a plain
+  0.8 grey. They are flattened to the mean of their two colours for the
+  export: the palette survives, the pattern does not. Banners, scaffold and
+  snow are therefore plainer than in the Cycles render, which leaves
+  `camera.py` fewer features to track (see the comparison).
+
+Checked: Replicator's `camera_params` focal agrees with `gt_raw.npz` on every
+frame, and frames side by side show the same framing and pose as the Cycles
+render of the same scene. Its `cameraViewTransform` is **not** a check: in
+Isaac Sim 6.2 it stays at the stage's last frame while the image follows
+the animated camera, so it is not written.
+
+**Hardware.** An A10G (`g5.xlarge`) could not run it: every start, even an
+empty stage, died with `VkResult: ERROR_DEVICE_LOST` and Xid 109 (CTX
+SWITCH TIMEOUT), on Isaac Sim 6.2 and 5.1, drivers 595 and 580, open and
+proprietary kernel modules, GSP on and off, clocks unlocked. The L4 ran
+first time on the AMI's own driver 595.
+
+**Cost.** 6,795 frames in 1.41 hours of rendering: 0.69 s a frame
+(median; 4 shutter samples plus 1 for the focal check, 2 subframes each),
+plus about 7 minutes of shader compile per Isaac process. A median clip
+(227 frames) renders in 166 s, about **$0.04** on a `g6.xlarge` at $0.80 an
+hour, close to Cycles' 0.6 s a frame on the same GPU. The pipeline ran on
+the Mac against the box's NIM through an SSH tunnel (the box's ffmpeg is
+4.4; ingest needs 5.1+), 24 to 145 s a clip.
+
+**Where it lives.** `data/synth/synthi00NN_<kind>_<spin>/` in the usual
+layout (`trick.json` is the Cycles clip's, renamed, with `source_clip`; the
+same split `group`), plus `replicator/render.json` (timings) and
+`replicator/camera.npz` (the rendered focal). `data/synth/MANIFEST.isaac.jsonl`
+has one line per clip in `MANIFEST.scale.jsonl`'s format with `renderer:
+isaac-replicator`, `source_clip`, render and pipeline seconds. Everything
+(without the PNG frames) is under `s3://snow-artifacts-009160029345/synth-isaac/`,
+with the comparison in `isaac_vs_blender.{txt,json}` and side-by-side
+frames in `isaac_samples/`.
+
+### Isaac Replicator against Blender Cycles, same 30 scenes
+
+Each Isaac clip is a Cycles clip of the training set re-rendered: same
+rider, venue, camera path, motion and labels. 10 flat, 10 cork, 10 double
+cork; 9 side, 9 front quarter, 6 back quarter, 6 low landing; slow motion
+1-3x. Both sets were re-measured with today's `features.py` (including
+`spin_count_deg`) from their stored poses and camera tracks, so only the
+renderer, and where the tracker ran (below), differ. Mean absolute errors
+in degrees unless stated:
+
+| variant | n | spin count over air vs named | spin count names it | dashboard spin right | dashboard direction right | spin path names it | axis tilt | max tilt | camera rotation | takeoff (frames) | landing (frames) |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| oracle (exact poses) | 30 | 23 | 30/30 | 30/30 | 30/30 | 28/30 | 8 | 15 | 0 | 4 | 4 |
+| Blender Cycles | 30 | 93 | **23/30** | 22/30 | 27/30 | 7/30 | 16 | 26 | 83 | 8 | 15 |
+| Isaac Replicator | 30 | 203 | **15/30** | 15/30 | 25/30 | 8/30 | 18 | 33 | 120 | 31 | 15 |
+
+By kind, spin count names it: flat 7/10 Cycles, 8/10 Isaac; cork 9/10,
+6/10; double cork 7/10, **1/10**. The loss is almost all in the corks.
+
+How the NIM reads the pixels (`snow synth fidelity`; detection over the
+frames where the rider is in view, the rest over detected frames):
+
+| renderer | detected | keypoint confidence | 2D error / box | PA-MPJPE (mm) |
+|---|---|---|---|---|
+| Blender Cycles | 0.979 | 0.739 | 0.041 | 70 |
+| Isaac Replicator | 0.865 | 0.696 | 0.070 | 90 |
+| real broadcast (`run1`, `trick`) | – | 0.62, 0.54 | – | – |
+
+Paired, Isaac's confidence is lower on 23 of 30 scenes, its 2D error higher on
+29 and its 3D joint error higher on 27.
+
+**What it says.** The NIM finds the Replicator renders harder, and in the
+direction of real footage: its confidence moves from 0.74 towards the 0.54
+to 0.62 it gives real broadcast clips, and its 2D and 3D errors rise by
+about 70% and 30%. So the Blender numbers were flattering, as
+[training.md](training.md#what-it-does-not-replace) warned they might be,
+and corks suffer most.
+
+Much of the loss is the **tracker**, not the NIM: YOLO keeps the rider in
+86.5% of in-view frames of the Isaac renders against 97.9% of the Cycles
+renders, and on 9 of 30 Isaac clips it holds the rider for only 47-64% of
+them (it picks the rider up late, from the air, or drops the inverted
+body). That is not the machine: the Cycles renders re-tracked on the Mac,
+where the Isaac clips were tracked, keep 98.1%. The NIM's own reading is
+worse too, on the frames it is given (the 2D and 3D errors above count
+detected frames only).
+
+**Why it is harder, as far as is known.** Not one cause, and not yet
+separated:
+
+- Light. A hard sun gives the body real shading and cast shadows, where
+  the Cycles render is flat and washed out; the Isaac venue is plainer
+  (patterns flattened) but more saturated against a blue sky.
+- Blur. Four discrete shutter samples leave fast limbs as steps, not a
+  smooth streak; a real camera's blur is continuous. More samples would
+  cost proportionally more.
+- Camera: `camera.py` over-reads the pan more (120 against 83 degrees of
+  error), plausibly because the flattened banners and snow carry less
+  texture to track.
+
+**Unverified.** Which of these matters is not measured; neither is whether
+"harder for the NIM" means "more like broadcast" beyond the one number real
+footage has (confidence). The comparison is 30 scenes. The pipeline for
+the Isaac clips ran on the Mac (tracker on CPU) and for the Cycles clips on
+the box (tracker on the GPU), both against the same NIM image, each on an
+L4; the tracker control above rules out the machine for tracking, not for
+the NIM call.
 
 ## The training set
 
@@ -243,8 +394,9 @@ seconds. All 285 are `done`. Errors: [validation.md](validation.md#synthetic-tra
 
 ## Limits
 
-- **Blender renders, not Replicator**: EEVEE for the first 20, Cycles for
-  the training set (the same scene and materials; Cycles was checked
+- **Blender renders for the published tables**: EEVEE for the first 20,
+  Cycles for the training set; 30 Replicator renders exist and read worse
+  (above) (the same scene and materials; Cycles was checked
   against EEVEE on one frame and matches in exposure). Body
   and board are plain materials: no cloth, hair, snow spray or crowd motion.
   Renders may be easier or harder for the NIM than broadcast footage, so

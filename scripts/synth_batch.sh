@@ -29,7 +29,7 @@ log() { echo "$(date -u +%FT%TZ) $*"; }
 sync_clip() {
   local name=$1
   [ -n "${SNOW_SYNTH_S3:-}" ] || return 0
-  aws s3 sync --quiet --exclude 'frames/*' --exclude '*.blend1' \
+  aws s3 sync --quiet --exclude 'frames/*' --exclude 'replicator/rgb_*' --exclude '*.blend1' \
     "$SYNTH/$name" "$SNOW_SYNTH_S3/data/synth/$name" || return 1
   for f in data/poses/"$name".* data/poses/"$name"-oracle.* data/clips/"$name".* \
            data/clips/"$name"-oracle.*; do
