@@ -239,7 +239,8 @@ dropped if its data is too thin without taking the rest down with it.
 > **Status: built** as `snow synth`, see [synthetic.md](synthetic.md), with
 > results in [validation.md](validation.md). It slots in *before* step 2
 > above, and changes what step 5 trains on. The published table is from
-> Blender renders; the Replicator renderer is written and unverified.
+> Blender renders. Replicator has since rendered 30 of the same scenes, and
+> the NIM reads them worse (see [synthetic.md](synthetic.md#isaac-replicator-against-blender-cycles-same-30-scenes)).
 
 ### What Omniverse is for here, and what it is not
 
