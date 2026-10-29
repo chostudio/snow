@@ -42,8 +42,97 @@ def load(clip: Path):
     return trick, motion
 
 
+def _flat_colours() -> list:
+    """Unlink procedural base colours, leaving each material's mean colour.
+
+    Blender's USD exporter writes ``UsdPreviewSurface`` and drops procedural
+    nodes (the venue's checker, brick, wave and noise textures), leaving a
+    linked base colour as plain 0.8 grey: a Replicator render of the stage
+    then shows a white venue. The mean of the two colours keeps the venue's
+    palette, though not its pattern. Returns what to re-link afterwards, so
+    the Blender render itself is untouched.
+    """
+    undo = []
+    for mat in bpy.data.materials:
+        if not mat.use_nodes:
+            continue
+        bsdf = next((n for n in mat.node_tree.nodes if n.type == "BSDF_PRINCIPLED"), None)
+        if bsdf is None or not bsdf.inputs["Base Color"].is_linked:
+            continue
+        link = bsdf.inputs["Base Color"].links[0]
+        source = link.from_node
+        if source.type == "VALTORGB":
+            colours = [np.array(e.color[:3]) for e in source.color_ramp.elements]
+        elif source.type in ("TEX_CHECKER", "TEX_BRICK"):
+            colours = [np.array(source.inputs[k].default_value[:3]) for k in ("Color1", "Color2")]
+        else:
+            continue
+        old = tuple(bsdf.inputs["Base Color"].default_value)
+        undo.append((mat, link.from_socket, old))
+        mat.node_tree.links.remove(link)
+        bsdf.inputs["Base Color"].default_value = (*np.mean(colours, axis=0), 1.0)
+    return undo
+
+
+def _relink(undo: list) -> None:
+    for mat, socket, old in undo:
+        bsdf = next(n for n in mat.node_tree.nodes if n.type == "BSDF_PRINCIPLED")
+        bsdf.inputs["Base Color"].default_value = old
+        mat.node_tree.links.new(socket, bsdf.inputs["Base Color"])
+
+
+def _drop_masked_helpers() -> int:
+    """Delete the vertices MPFB's Mask modifier hides, before a skinned export.
+
+    The MakeHuman base mesh carries helper geometry (a skirt, tights, joint
+    markers) that a Mask modifier hides. Blender exports a skinned mesh
+    without its modifiers, so in USD the helpers come back and a Replicator
+    render shows the rider in a skirt. Deleting exactly the masked vertices
+    changes nothing Blender renders: they were never visible. Returns how
+    many were removed.
+    """
+    import bmesh
+
+    removed = 0
+    for obj in bpy.data.objects:
+        if obj.type != "MESH":
+            continue
+        for mod in [m for m in obj.modifiers if m.type == "MASK" and m.mode == "VERTEX_GROUP"]:
+            group = obj.vertex_groups.get(mod.vertex_group)
+            if group is None:
+                continue
+            keep = set()
+            for v in obj.data.vertices:
+                if any(g.group == group.index and g.weight > mod.threshold for g in v.groups):
+                    keep.add(v.index)
+            bm = bmesh.new()
+            bm.from_mesh(obj.data)
+            bm.verts.ensure_lookup_table()
+            drop = [v for v in bm.verts if (v.index in keep) == mod.invert_vertex_group]
+            bmesh.ops.delete(bm, geom=drop, context="VERTS")
+            bm.to_mesh(obj.data)
+            bm.free()
+            removed += len(drop)
+    return removed
+
+
 def export_usd(path: Path) -> None:
-    """The whole animated scene as USD, skeleton and skin included."""
+    """The whole animated scene as USD, skeleton and skin included.
+
+    Procedural colours are flattened for the export only (``_flat_colours``),
+    and the body's masked helper vertices are deleted first
+    (``_drop_masked_helpers``; the scene is already saved and the render is
+    unchanged).
+    """
+    print(f"snow-synth: dropped {_drop_masked_helpers()} masked helper vertices")
+    undo = _flat_colours()
+    try:
+        _export(path)
+    finally:
+        _relink(undo)
+
+
+def _export(path: Path) -> None:
     options = {
         "filepath": str(path),
         "export_animation": True,
