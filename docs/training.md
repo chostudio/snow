@@ -359,8 +359,11 @@ was found, which is why the tricks are generated. Leads worth knowing:
    see [synthetic.md](synthetic.md)).
 3. Let that table decide which heads need learning and which are
    measurements.
-4. Scale the synthetic set, pre-train the segmenter and classifier on its NIM
-   output, then fine-tune and evaluate on the real, human-labelled gold set.
+4. Scale the synthetic set (done: 285 clips with split groups, half with
+   long ground time; see [synthetic.md](synthetic.md#the-training-set) and
+   `data/synth/MANIFEST.scale.jsonl`), pre-train the segmenter and
+   classifier on its NIM output, then fine-tune and evaluate on the real,
+   human-labelled gold set.
 
 ## The judging score
 

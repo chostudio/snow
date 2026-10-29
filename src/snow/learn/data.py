@@ -41,6 +41,9 @@ class ClipSource:
     split: str | None = None     # "train" / "test" when the manifest fixes it
     kind: str = ""
     camera_angle: str = ""
+    # "long-ground" (standing start, deck riding, turns, long ride-out) or
+    # "big-air" (short straight in-run and ride-out); "real" for gold labels.
+    variant: str = ""
 
 
 def heuristic_hint(df: pd.DataFrame) -> np.ndarray:
@@ -69,7 +72,10 @@ def web_detector_mask(name: str, frame_ids: np.ndarray) -> np.ndarray:
 def from_synth_labels(clip_dir: Path, group: str | None = None,
                       split: str | None = None) -> ClipSource:
     labels = json.loads((clip_dir / "labels.json").read_text())
+    trick_path = clip_dir / "trick.json"
+    trick = json.loads(trick_path.read_text()) if trick_path.exists() else {}
     return ClipSource(
+        variant="long-ground" if trick.get("terrain") else "big-air",
         name=labels.get("name", clip_dir.name), group=group or labels.get("name", clip_dir.name),
         takeoff=[int(labels["takeoff_frame"])], landing=[int(labels["landing_frame"])],
         slowmo=float(labels.get("slowmo_factor", 1.0)), split=split,
@@ -131,7 +137,7 @@ def load_clip(src: ClipSource, poses_dir: Path | None = None, baselines: bool = 
         y |= (frame_ids >= t0) & (frame_ids < t1)
     clip = {
         "name": src.name, "group": src.group, "split": src.split, "slowmo": src.slowmo,
-        "kind": src.kind, "camera_angle": src.camera_angle,
+        "kind": src.kind, "camera_angle": src.camera_angle, "variant": src.variant,
         "frame_id": frame_ids,
         "segment": df["segment"].to_numpy(dtype=int),
         "x": I.frame_channels(detections, df, rotations),
@@ -145,7 +151,7 @@ def load_clip(src: ClipSource, poses_dir: Path | None = None, baselines: bool = 
 
 
 ARRAYS = ("frame_id", "segment", "x", "x_mirror", "y", "hint", "web")
-FIELDS = ("name", "group", "split", "slowmo", "kind", "camera_angle")
+FIELDS = ("name", "group", "split", "slowmo", "kind", "camera_angle", "variant")
 
 
 def save_bundle(clips: list[dict], dest: Path) -> None:

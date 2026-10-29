@@ -1,9 +1,10 @@
-"""Command line entry point: snow ingest | track | pose | run | classify | doctor | coach | serve."""
+"""Command line entry point: snow ingest | track | pose | run | classify | label | doctor | coach | serve."""
 
 from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -503,7 +504,7 @@ def cmd_synth(args: argparse.Namespace) -> int:
         steps.pipeline_all(selected, args.spacing)
     if args.step in ("compare", "all"):
         rows = steps.results(selected)
-        for by in ("true_kind", "true_camera_angle"):
+        for by in ("true_set", "true_kind", "true_camera_angle"):
             for variant in ("oracle", "pipeline"):
                 print(f"\n{variant}, by {by.replace('true_', '')}")
                 print(compare.table([r for r in rows if r["variant"] == variant], by))
@@ -548,6 +549,19 @@ def cmd_serve(args: argparse.Namespace) -> int:
     from . import serve
 
     serve.serve(args.host, args.port)
+    return 0
+
+
+def cmd_label(args: argparse.Namespace) -> int:
+    """The hand-labelling page; see docs/labelling.md."""
+    from .label import prefill, server
+
+    if args.fetch:
+        for line in prefill.fetch_weights():
+            print(line)
+    server.run(args.host, args.port, Path(args.csv), open_browser=not args.no_browser,
+               labeller=args.labeller, segmenter=args.segmenter, classifier=args.classifier,
+               refresh=args.refresh)
     return 0
 
 
@@ -811,6 +825,25 @@ def build_parser() -> argparse.ArgumentParser:
     p_serve.add_argument("--host", default="127.0.0.1")
     p_serve.add_argument("--port", type=int, default=8000)
     p_serve.set_defaults(func=cmd_serve)
+
+    p_label = sub.add_parser(
+        "label", help="hand-label real airs and tricks in the browser (docs/labelling.md)"
+    )
+    p_label.add_argument("--host", default="127.0.0.1")
+    p_label.add_argument("--port", type=int, default=8765)
+    p_label.add_argument("--csv", default=str(cfg.DATA_DIR / "labels" / "real_airs.csv"),
+                         help="labels file, autosaved (labels.py format)")
+    p_label.add_argument("--labeller", default=os.environ.get("USER", ""),
+                         help="written into each row's labeller column")
+    p_label.add_argument("--fetch", action="store_true",
+                         help="first copy the segmenter and classifier weights from S3 into "
+                              "data/models/ (never data/weights)")
+    p_label.add_argument("--segmenter", help="segmenter weights for the machine guesses")
+    p_label.add_argument("--classifier", help="classifier weights for the machine guesses")
+    p_label.add_argument("--refresh", action="store_true",
+                         help="recompute the machine guesses instead of using the cache")
+    p_label.add_argument("--no-browser", action="store_true", help="do not open a browser")
+    p_label.set_defaults(func=cmd_label)
 
     from .learn import cli as learn_cli
 

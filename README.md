@@ -145,6 +145,21 @@ asks Nemotron. Without it the panel shows a rule-based template and says so.
 
 <small>A 24-second 1080p clip is about 19 seconds of inference.</small>
 
+### Label real airs
+
+The models are measured on synthetic renders only; real labels are the gap.
+One command opens a labelling page on localhost:
+
+```bash
+snow label            # http://127.0.0.1:8765; --fetch first copies the model weights from S3
+```
+
+It lists the real clips in `data/clips`, plays them frame by frame with the
+skeleton on top, pre-fills the machines' guesses (clearly marked as such),
+autosaves to `data/labels/real_airs.csv`, and has a beginner's guide to
+snowboard tricks beside the player ([docs/labelling.md](docs/labelling.md)).
+`snow segmenter build --gold data/labels/real_airs.csv` reads that file.
+
 ## Two things that will bite you
 
 **Broadcast cuts shatter tracking.** Every camera cut makes the tracker issue
@@ -177,9 +192,13 @@ not yet.**
 - On synthetic motion the maths is exact — a known 1080 about a known axis
   comes back as 1080, within 2°.
 - On real footage, absolute spin counts are **unvalidated**. On a clip from a
-  video titled *"Frontside Double Cork 1080"* the pipeline reads 668°. It has
-  not been established that the shot the scout picked is the trick the title
-  names, so that is an open question rather than a known error rate.
+  video titled *"Frontside Double Cork 1080"* the pipeline reads 720 (667°
+  over its detected air). It has not been established that the shot the
+  scout picked is the trick the title names, nor where its air starts, so
+  that is an open question rather than a known error rate.
+- On 96 held-out synthetic clips the dashboard names the spin on 67, at any
+  slow motion, without being told the factor; with exact poses, 96. The gap
+  is the pose model's error.
 - Metric scale is uncalibrated — the focal length is assumed. Exported
   skeletons come out about 1.2 m tall. Angles and ratios hold; metres do not.
 
@@ -197,6 +216,7 @@ Read it before you quote a number.
 | [docs/usd.md](docs/usd.md) | USD / Omniverse export |
 | [docs/validation.md](docs/validation.md) | what is proven and what is not |
 | [docs/coach.md](docs/coach.md) | the Nemotron coach: what it sees, what it may return |
+| [docs/labelling.md](docs/labelling.md) | `snow label`, and how to tell tricks apart if you have never watched snowboarding |
 | [docs/training.md](docs/training.md) | **planned:** how the models would be trained |
 | [web/README.md](web/README.md) | the review dashboard |
 | [AGENTS.md](AGENTS.md) | architecture map, for agents working on the code |

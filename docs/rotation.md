@@ -99,7 +99,8 @@ No single measure covers every trick. Columns in
 
 | column | meaning |
 |---|---|
-| `spin_path_deg` | angular path, signed by the turn's sense about world up — **the headline number** |
+| `spin_path_deg` | angular path frame to frame, signed by the turn's sense about world up; the curve on screen, no longer the count (see below) |
+| `body_qx`..`body_qw` | camera-compensated body orientation as a quaternion; `spin_count_deg` over an air is **the headline number** |
 | `axis_spin_deg` | rotation about the trick's **own** dominant axis; undercounts corks |
 | `spin_deg` | cumulative yaw about the world vertical, with `spin_quality` |
 | `rotation_deg` | total angular path, axis-agnostic; counts flips too |
@@ -161,6 +162,57 @@ also cannot tell a spin from a flip; it counts both.
 so it no longer reads every spin as counter-clockwise), and its axis still
 gives `spin_axis_tilt_deg`.
 
+### Counting a spin through pose jitter
+
+`spin_path_deg` is still a column and still means what it says, but the
+dashboard no longer counts an air with it. The frame-to-frame path adds
+every frame's pose jitter, a few degrees each, whether or not the rider
+turned. Slow motion is where that bites: a clip slowed k times has k times
+the frames for the same turn, so k times the jitter against an unchanged
+total. On the 285-clip synthetic set, through the NIM, the path over the
+**true** air read a median 96 degrees high and named 112 of 285 tricks;
+the dashboard's own, shorter air window happened to cancel some of that
+(116 named), so neither the measure nor the window was right
+([validation.md](validation.md#fixed-after-this-table-slow-motion-and-pose-jitter)).
+
+`features.spin_count_deg` counts the same path between orientations about
+**90 degrees of turn apart** rather than one frame apart:
+
+- A chord well under 180 degrees cannot alias, and jitter adds to a chord
+  roughly once instead of once per frame.
+- The chord's length in frames is found from the count itself (a fixed
+  point from one frame), so it is about one frame on a real-time 1080 and
+  several at 4x. It is an angle, not a time, which is why **no slow-motion
+  factor is needed**. Knowing the factor did not help: chords of a fixed
+  number of real-time frames named 127 to 139 of the development split's
+  189 where the chord set by the turn named 142 to 143.
+- The result is averaged over every starting phase of the chords, so it
+  does not depend on which frames they land on.
+- It cuts corners where the axis moves within a chord, so on exact poses it
+  reads double corks a median 21 degrees low (95 of 96 still named).
+
+The air detector reads the matching rate, `features.robust_speed`: the
+chord angle over a span set so the clip's fastest chords are about 60
+degrees. On slow motion the five-frame rate the detector used was mostly
+jitter, which set the peak its gates are fractions of and misplaced airs
+(takeoff off by 67 frames on average at 4x). The span is also the clip's own unit of
+time, so a pose hole is followed for up to four spans.
+
+Both need the body orientation, which `snow features` now writes as
+`body_qx`..`body_qw`: the camera-compensated body frame as a quaternion.
+
+What was tried and not kept, on the development split only:
+
+| idea | result |
+|---|---|
+| Gaussian smoothing of the orientation, fixed width in frames | helps slow motion, hurts real time past 3 frames (a 1440 at 1x turns 40 degrees a frame) |
+| smoothing scaled by the known slow-motion factor | about as good as the chord count with the true air (140 against 149 of 189), and needs the factor |
+| local quadratic fit of the rotation, integrated speed | 155 of 189 over the true air against 149, but inside the detected air 143 to 147 against 143, mixed by kind, and costlier |
+| parity: heading at landing against takeoff, so the count must be an odd or even multiple of 180 | with the true parity 163 of 189 against 143; measured through the pipeline the parity was right on 84%, worth 3 clips when gated on confidence. Not shipped |
+| correcting the NIM's front/back flips by a depth reflection (with left and right swapped) chosen per frame by smoothness | the reflection does recover the true pose in a flip (error 155 to 15 degrees), but a smoothness criterion did not pick it; flips are 1.4% of airborne frames |
+| merging airs split by a brief dip in the rate | fixed one split, over-read three flat spins |
+| the wind-up trim anywhere in the air | cut real air on slow motion: 130 against 141 without it. It now cuts only outside the air's fast core (140) |
+
 ### Tilt
 
 `tilt_deg` is the angle between the rider's up axis and world vertical. It is
@@ -172,7 +224,9 @@ depend on metric scale.
 
 Rates use real time. A slow-motion clip **must** carry its `slowmo_factor`
 (see [footage.md](footage.md)) or every deg/s is wrong by that factor. Totals
-are unaffected.
+are unaffected in principle, but only if the measure does not add something
+per frame: the frame-to-frame path did (pose jitter), which is why the count
+is now taken over chords (above).
 
 ## Principal-point correction
 

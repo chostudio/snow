@@ -418,10 +418,292 @@ produced no air event, so dashboard columns count 18.
 ## The airborne segmenter
 
 **Real footage: not proven.** Measured on synthetic renders only
-([segmenter.md](segmenter.md)). On the two real clips it calls most
-frames airborne, including a rider standing at the top of a halfpipe, so its
-real accuracy is not just unmeasured but suspect. No real clip has
+([segmenter.md](segmenter.md)). On real clips it calls most of a halfpipe
+run airborne, including the rider standing at the top, and it still did
+after training on synthetic clips with standing starts and long riding, and
+with noise measured on real ground pose added in training. What remains is
+systematic (a reference up tipped by a camera pitched at the rider, steady
+pans, crouched riding), not jitter. Its real accuracy is not
+just unmeasured but suspect. No real clip has
 hand-labelled takeoff and landing frames yet.
+
+## Synthetic training set: 285 clips
+
+October 2026. The training set of [synthetic.md](synthetic.md#the-training-set):
+285 clips (`synthb0001`-`0285`), balanced across kind, spin 180-1440,
+direction, grab, camera position and slow motion 1-4x, rendered with Cycles
+on an AWS L4 and run through the **unchanged** pipeline against a
+self-hosted NIM. Two families: `short_ground` (146 clips, 61% of frames
+airborne, the first 20's short run-in) and `long_ground` (139 clips, 30%
+airborne: standing starts, long approaches, carving ride-outs). Scored by
+the same `snow synth compare` as the 20-clip table above, at the current
+code (fixed tracker, dashboard detector with one sense per air). Same
+columns and caveats as above; "right" columns are counts of clips with an
+air event.
+
+### Pipeline, by family
+
+| set | n | axis spin vs named | vertical yaw vs named | spin path over air vs named | spin path names it | spin path sense right | dashboard spin right | dashboard direction right | axis tilt | max tilt | camera rotation | takeoff (frames) | landing (frames) |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| long_ground | 139 | 234 | 318 | 196 | 57/137 | 126/137 | 58/135 | 123/135 | 17 | 31 | 214 | 29 | 27 |
+| short_ground | 146 | 217 | 299 | 207 | 54/146 | 137/146 | 58/146 | 139/146 | 14 | 27 | 131 | 32 | 31 |
+| validation | 20 | 165 | 297 | 180 | 11/20 | 19/20 | 13/20 | 20/20 | 19 | 24 | 116 | 12 | 15 |
+| **all** | 305 | 221 | 308 | 201 | 122/303 | 282/303 | 129/301 | 282/301 | 16 | 29 | 168 | 29 | 28 |
+
+### Oracle (exact skeleton, true camera), by family
+
+| set | n | axis spin vs named | vertical yaw vs named | spin path over air vs named | spin path names it | spin path sense right | dashboard spin right | dashboard direction right | axis tilt | max tilt | camera rotation | takeoff (frames) | landing (frames) |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| long_ground | 139 | 131 | 200 | 44 | 134/139 | 135/139 | 133/137 | 137/137 | 7 | 19 | 0 | 7 | 9 |
+| short_ground | 146 | 130 | 196 | 58 | 136/146 | 143/146 | 140/144 | 142/144 | 9 | 19 | 0 | 7 | 8 |
+| validation | 20 | 135 | 147 | 27 | 20/20 | 20/20 | 20/20 | 20/20 | 8 | 15 | 0 | 7 | 8 |
+| **all** | 305 | 131 | 195 | 50 | 290/305 | 298/305 | 293/301 | 299/301 | 8 | 19 | 0 | 7 | 8 |
+
+### Pipeline, by trick: short ground (big air, short run-in)
+
+| kind | n | axis spin vs named | vertical yaw vs named | spin path over air vs named | spin path names it | spin path sense right | dashboard spin right | dashboard direction right | axis tilt | max tilt | camera rotation | takeoff (frames) | landing (frames) |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| cork | 49 | 249 | 340 | 228 | 13/49 | 47/49 | 18/49 | 47/49 | 12 | 21 | 124 | 44 | 31 |
+| double_cork | 49 | 282 | 441 | 224 | 19/49 | 43/49 | 14/49 | 46/49 | 13 | 22 | 141 | 33 | 31 |
+| flat | 48 | 120 | 113 | 170 | 22/48 | 47/48 | 26/48 | 46/48 | 17 | 38 | 129 | 19 | 30 |
+| **all** | 146 | 217 | 299 | 207 | 54/146 | 137/146 | 58/146 | 139/146 | 14 | 27 | 131 | 32 | 31 |
+
+### Pipeline, by trick: long ground
+
+| kind | n | axis spin vs named | vertical yaw vs named | spin path over air vs named | spin path names it | spin path sense right | dashboard spin right | dashboard direction right | axis tilt | max tilt | camera rotation | takeoff (frames) | landing (frames) |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| cork | 46 | 219 | 272 | 174 | 20/45 | 42/45 | 19/45 | 40/45 | 13 | 18 | 213 | 22 | 32 |
+| double_cork | 47 | 323 | 516 | 245 | 17/46 | 42/46 | 17/46 | 40/46 | 13 | 23 | 213 | 35 | 32 |
+| flat | 46 | 157 | 163 | 170 | 20/46 | 42/46 | 22/44 | 43/44 | 25 | 51 | 218 | 30 | 16 |
+| **all** | 139 | 234 | 318 | 196 | 57/137 | 126/137 | 58/135 | 123/135 | 17 | 31 | 214 | 29 | 27 |
+
+### Pipeline, training set (285), by slow-motion factor
+
+| slowmo_factor | n | axis spin vs named | vertical yaw vs named | spin path over air vs named | spin path names it | spin path sense right | dashboard spin right | dashboard direction right | axis tilt | max tilt | camera rotation | takeoff (frames) | landing (frames) |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| 1.0 | 71 | 214 | 269 | 108 | 47/71 | 68/71 | 50/71 | 70/71 | 13 | 25 | 64 | 5 | 6 |
+| 2.0 | 71 | 197 | 265 | 196 | 22/71 | 69/71 | 26/71 | 67/71 | 14 | 30 | 150 | 14 | 20 |
+| 3.0 | 71 | 241 | 385 | 253 | 21/70 | 62/70 | 23/70 | 62/70 | 17 | 25 | 210 | 37 | 35 |
+| 4.0 | 72 | 249 | 316 | 253 | 21/71 | 64/71 | 17/69 | 63/69 | 19 | 36 | 261 | 67 | 55 |
+| **all** | 285 | 225 | 308 | 202 | 111/283 | 263/283 | 116/281 | 262/281 | 16 | 29 | 172 | 31 | 29 |
+
+### Pipeline, training set (285), by camera position
+
+| camera_angle | n | axis spin vs named | vertical yaw vs named | spin path over air vs named | spin path names it | spin path sense right | dashboard spin right | dashboard direction right | axis tilt | max tilt | camera rotation | takeoff (frames) | landing (frames) |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| back_quarter | 72 | 255 | 388 | 233 | 28/72 | 63/72 | 29/71 | 63/71 | 20 | 29 | 150 | 30 | 38 |
+| front_quarter | 70 | 217 | 320 | 183 | 24/68 | 63/68 | 27/68 | 62/68 | 13 | 30 | 136 | 25 | 25 |
+| low_landing | 72 | 199 | 252 | 145 | 30/72 | 71/72 | 28/72 | 70/72 | 14 | 28 | 155 | 42 | 24 |
+| side | 71 | 230 | 273 | 247 | 29/71 | 66/71 | 32/70 | 67/70 | 16 | 27 | 246 | 25 | 27 |
+| **all** | 285 | 225 | 308 | 202 | 111/283 | 263/283 | 116/281 | 262/281 | 16 | 29 | 172 | 31 | 29 |
+
+### Findings
+
+1. **The 20-clip headline does not hold at scale.** The dashboard names the
+   spin on 13 of 20 validation clips but **116 of 281** (41%) training-set
+   clips with an air event; the sense is right on 262 of 281 (93%). Flat
+   spins fare best (48/92 across both families), corks and double corks
+   about a third (37/94, 31/95). The 20 were a lucky, narrow sample: four
+   double cork 1080s and no 180s, 1260 corks or 900 double corks.
+2. **The definitions still hold on exact poses.** Through the oracle the
+   spin path over the air names 290 of 305 and the dashboard 293 of 301.
+   So the gap is perception (NIM plus `camera.py`), as before.
+3. **Slow motion is now the clearest predictor of failure**: 50 of 71
+   named at 1x, 17 of 69 at 4x. The misses go both ways (at 4x, 22 over and
+   30 under), takeoff error grows from 5 to 67 frames and camera-rotation
+   error from 64 to 261 degrees. A slowed clip has k times the frames for the
+   same turn, so whatever error accrues per frame (pose jitter in the path,
+   camera jitter) grows k times against an unchanged total. Diagnosed and
+   fixed in the next section (held out: 4 of 22 named at 4x became 15).
+4. **Long ground time adds false airs through the pipeline.** The oracle
+   finds exactly one air on 281 of 285 clips. Through the pipeline the
+   dashboard's detector finds more than one on 49 of 139 `long_ground`
+   clips (up to five) and 31 of 146 `short_ground`: carving and jitter on
+   the snow read as rotation. This is the case the learned airborne
+   segmenter is for; the heuristic detector is not a ground truth for it.
+   Spin and direction are no worse on long ground (58/135 named against
+   58/146).
+5. **Camera position matters little**: 27-32 named per ~70 clips for every
+   position. Camera-rotation error is largest from the side (246 degrees).
+
+No pipeline run failed on any of the 285 clips, and every clip has an air
+event on the oracle except four.
+
+### Fixed after this table: slow motion and pose jitter
+
+October 2026. Same 285 clips, same poses and camera tracks: no NIM calls,
+no new renders. Everything below is `snow features` and the dashboard's
+detector re-run on files already on disk.
+
+**Split.** The 72 manifest groups were split once, by a fixed seed, before
+any number was looked at: 48 groups (189 clips) for development, 24 groups
+(96 clips) held out. Every choice below was made on the development clips.
+The held-out clips and the 20 validation clips (EEVEE, a different
+renderer) were scored **once**, after the method was frozen, and nothing
+was changed after that.
+
+#### Where the error came from
+
+One component swapped at a time between pipeline and truth, the old
+measure (frame-to-frame path), all 285 clips. Named right of 285; in
+brackets over / under (no air event counts as under); then the median
+signed error of the measured rotation in degrees. "(c) true air" is the
+path over the labelled takeoff to landing instead of the detected air.
+The diagnosis itself used the development clips only; this table was
+computed on all 285 afterwards.
+
+| slow motion | pipeline | (a) true camera | (b) exact pose | (c) true air | oracle |
+|---|---|---|---|---|---|
+| 1x | 50/71 (14/7) +27 | 54/71 (11/6) +18 | 66/71 (3/2) +21 | 51/71 (18/2) +40 | 70/71 (1/0) +7 |
+| 2x | 26/71 (26/19) +46 | 40/71 (13/18) +24 | 52/71 (16/3) +49 | 21/71 (42/8) +99 | 71/71 (0/0) +20 |
+| 3x | 23/71 (27/21) +42 | 33/71 (16/22) +19 | 42/71 (22/7) +50 | 21/71 (47/3) +128 | 66/71 (3/2) +12 |
+| 4x | 17/72 (22/33) +24 | 25/72 (14/33) -23 | 46/72 (19/7) +49 | 19/72 (46/7) +152 | 66/72 (1/5) +2 |
+| **all** | 116/285 (89/80) +32 | 152/285 (54/79) +17 | 206/285 (60/19) +42 | 112/285 (153/20) +96 | 273/285 (5/7) +10 |
+
+| kind | pipeline | (a) true camera | (b) exact pose | (c) true air | oracle |
+|---|---|---|---|---|---|
+| cork | 37/95 (30/28) +29 | 45/95 (21/29) +8 | 65/95 (24/6) +43 | 32/95 (55/8) +99 | 90/95 (4/1) +13 |
+| double_cork | 31/96 (30/35) +15 | 41/96 (26/29) +13 | 69/96 (17/10) +28 | 40/96 (47/9) +86 | 93/96 (1/2) -4 |
+| flat | 48/94 (29/17) +61 | 66/94 (7/21) +24 | 72/94 (19/3) +48 | 40/94 (51/3) +96 | 90/94 (0/4) +14 |
+| **all** | 116/285 (89/80) +32 | 152/285 (54/79) +17 | 206/285 (60/19) +42 | 112/285 (153/20) +96 | 273/285 (5/7) +10 |
+
+| camera | pipeline | (a) true camera | (b) exact pose | (c) true air | oracle |
+|---|---|---|---|---|---|
+| back_quarter | 29/72 (12/31) -47 | 33/72 (12/27) -31 | 58/72 (7/7) +33 | 29/72 (31/12) +78 | 68/72 (2/2) +13 |
+| front_quarter | 27/70 (32/11) +85 | 42/70 (19/9) +41 | 50/70 (15/5) +38 | 21/70 (45/4) +108 | 65/70 (2/3) +7 |
+| low_landing | 28/72 (24/20) +26 | 39/72 (10/23) -0 | 44/72 (24/4) +61 | 33/72 (37/2) +92 | 71/72 (1/0) +9 |
+| side | 32/71 (21/18) +43 | 38/71 (13/20) +26 | 54/71 (14/3) +40 | 29/71 (40/2) +107 | 69/71 (0/2) +15 |
+
+By family the two rows are alike (long ground 58/139, short 58/146; true
+camera 75 and 77; exact pose 99 and 107; true air 56 and 56).
+
+What it says:
+
+1. **The NIM's pose is the largest single cause** (exact pose: 116 to 206),
+   then `camera.py` (true camera: to 152). With both exact and the
+   detector's own air, 273.
+2. **The measure was over-reading, and the air window was hiding it.**
+   Given the true air, the pipeline named *fewer* (112): the path read a
+   median 96 degrees high, 152 at 4x, 153 of 285 over a step. The
+   detector's window was wrong (at 4x its takeoff was off by 67 frames on
+   average, mostly late) and its truncation cancelled part of the over-read by luck,
+   which is why the misses went both ways.
+3. **What grows with slow motion is anything added per frame.** Pose
+   jitter (a few degrees a frame, whatever the rider does) and `camera.py`'s
+   frame-to-frame jitter both enter the path once per frame, and a 4x clip
+   has four times the frames for the same turn. With exact poses but
+   `camera.py`'s camera over the true air the path still read +49 to +64
+   at 2x-4x (+29 at 1x).
+   And the detector's rate, read over five frames, was mostly that jitter on
+   slow motion, so it set the peak the gates scale from and broke airs up.
+
+#### What changed
+
+`snow features` writes the camera-compensated body orientation
+(`body_qx`..`body_qw`), and the dashboard's detector, given those columns:
+
+- reads the turn rate over a chord whose span the clip's own turn sets
+  (`features.robust_speed`; fastest chords about 60 degrees);
+- follows a pose hole for up to four such spans (20 frames at 4x is five
+  real ones);
+- drops the RPM floors, which are real-time thresholds slow motion divides;
+- trims a wind-up only outside the air's fast core (inside it, trimming cut
+  real air on slow motion: 130 named on development against 141 untrimmed;
+  core-limited 140);
+- counts the air with `features.spin_count_deg`: the angular path between
+  orientations about 90 degrees of turn apart, the span found from the
+  count itself, averaged over chord phases. The old frame-to-frame figure
+  is kept beside it as `path_rotation_deg`.
+
+None of it needs the slow-motion factor; knowing it did not help (see
+[rotation.md](rotation.md#counting-a-spin-through-pose-jitter), which also
+lists what was tried and dropped: smoothing, a local quadratic fit, a
+takeoff/landing parity constraint, correcting front/back flips, merging
+split airs).
+
+#### Result
+
+Held out (96 clips, 24 groups, scored once). Named right, (over / under),
+median signed error in degrees:
+
+| slow motion | n | pipeline, before | pipeline, after | oracle, before | oracle, after |
+|---|---|---|---|---|---|
+| 1x | 23 | 17 (2/4) -10 | 17 (2/4) -37 | 23 (0/0) +8 | 23 (0/0) -3 |
+| 2x | 26 | 10 (10/6) +73 | **19** (2/5) +21 | 26 (0/0) +25 | 26 (0/0) +3 |
+| 3x | 25 | 9 (8/8) +17 | **16** (4/5) +16 | 23 (1/1) +16 | 25 (0/0) +1 |
+| 4x | 22 | 4 (10/8) +88 | **15** (2/5) -6 | 19 (1/2) +11 | 22 (0/0) +1 |
+| **all** | 96 | 40 (30/26) +28 | **67** (10/19) -0 | 91 (2/3) +13 | **96** (0/0) +0 |
+
+| kind | n | pipeline, before | pipeline, after | oracle, before | oracle, after |
+|---|---|---|---|---|---|
+| cork | 32 | 14 (11/7) +33 | **23** (2/7) -17 | 31 (1/0) +12 | 32 (0/0) -5 |
+| double_cork | 31 | 12 (8/11) +15 | **20** (4/7) -5 | 29 (1/1) +17 | 31 (0/0) -0 |
+| flat | 33 | 14 (11/8) +56 | **24** (4/5) +18 | 31 (0/2) +13 | 33 (0/0) +1 |
+
+| family / camera | n | pipeline, before | pipeline, after | oracle, before | oracle, after |
+|---|---|---|---|---|---|
+| long_ground | 44 | 20 (11/13) +13 | 27 (7/10) +2 | 43 (0/1) +15 | 44 (0/0) +2 |
+| short_ground | 52 | 20 (19/13) +36 | 40 (3/9) -0 | 48 (2/2) +11 | 52 (0/0) -0 |
+| back_quarter | 26 | 10 (2/14) -161 | 13 (3/10) -68 | 23 (1/2) +11 | 26 (0/0) -2 |
+| front_quarter | 22 | 13 (7/2) +69 | 20 (1/1) +17 | 21 (0/1) +12 | 22 (0/0) +0 |
+| low_landing | 24 | 8 (10/6) +14 | 18 (1/5) +10 | 23 (1/0) +15 | 24 (0/0) +2 |
+| side | 24 | 9 (11/4) +64 | 16 (5/3) +18 | 24 (0/0) +15 | 24 (0/0) -0 |
+
+The 20 validation clips (EEVEE, scored once): pipeline **13 to 19 of 20**
+(over 6 to 0, under 1 to 1), oracle 20 to 20; corks 4 to 6 of 6, double
+corks 3 to 6 of 7, flat 6 to 7 of 7. The development clips, for
+reference: pipeline 76 to 140 of 189, oracle 182 to 188.
+
+Also on the held-out clips: direction right 87 of 95 airs to 89 of 96; clips
+where the detector found more than one air 21 to 16 (development 59 to 33);
+mean takeoff / landing error 27 / 32 frames to 19 / 23.
+
+The Isaac renders (`synthi*`, 30 clips, another renderer) have ground truth
+but **no pipeline poses** yet, so only the oracle can be scored there: 30 of
+30 before and after. That checks the measure on a third renderer's exact
+skeletons, not perception.
+
+After the fix, swapping one component at a time again (all 285): pipeline
+207, true camera 209, true air 219, exact pose **272**, oracle 284. The
+camera and the window now barely matter; **what is left is the NIM's pose**.
+
+#### Real clips (no ground truth; readings only)
+
+| clip | air | before | after |
+|---|---|---|---|
+| `trick` (*"Frontside Double Cork 1080"*) | main | frames 40-259, -1018 (1080) | frames 68-260, **-667 (720)** |
+| | first | (trimmed as a wind-up) | frames 0-65, +215 (180), the opposite sense |
+| `run1` | long | frames 492-579, +1013 (1080) | frames 492-572, +951 (900) |
+| | small, 357-380 | -228 (180) | not detected |
+
+The `trick` reading moved a long way, and the earlier agreement with the
+title does not survive it. Over the **old** window (40-259) the frame-to-frame
+path is 1018 but every jitter-robust reading is far lower: the chord count
+728, a smoothed path 748-828, a local quadratic fit 720-741. Over 20-259
+they read 800-930. So most of the old 1018 was the same per-frame jitter
+the synthetic set measured (frame to frame this pose moves a median 3.5
+degrees, while a 1080 over these 220 frames turns under 5 a frame, so
+jitter is a large share of every step), and the count now
+depends on where the air starts, which on this clip is not known: the
+rider is already past 130 degrees of tilt at frame 66, where the detector
+splits it. The count also cuts corners where the axis moves fast, and a
+real double cork's axis moves more than the synthetic ones' (on exact
+synthetic double corks it reads a median 21 degrees low). Neither reading
+is validated; this one is short of the title, by a step or two.
+
+#### What is not explained or fixed
+
+- **The NIM's pose**, 207 against 272 with exact poses. Two development
+  clips have no pose anywhere in the air (the tracker); 19 have its
+  front/back flip on more than 5% of airborne frames (the pose turns the
+  wrong way for a few frames each time the rider faces the camera; 1.4% of
+  all airborne frames). The rest is ordinary jitter and the occasional
+  hole.
+- **Misses now lean under**: 53 under against 25 over across the 285.
+  Double corks are the weakest (61 of 96), partly the chord cutting corners
+  where the axis moves.
+- **1x did not improve on the held-out clips** (17 of 23 both ways; on
+  development 33 to 40 of 48).
 
 ## Claims you may not make
 
@@ -433,10 +715,15 @@ hand-labelled takeoff and landing frames yet.
   score as a real one
 - that a corked trick's spin count is right through the pipeline: the
   measure names corks correctly on exact poses; through the pipeline, with
-  the tracker and the air detector fixed, the dashboard named 7 of 13
-  synthetic corks (it was 1). The rest over-read by a step from pose jitter
+  the jitter-robust count, the dashboard names 43 of 63 held-out synthetic
+  corks and double corks (it named 26), and the rest now mostly read a step
+  short. On the real clip titled as a double cork 1080 it reads 720
+- that slow motion no longer costs accuracy: the count no longer needs the
+  factor, and held out it named 15 of 22 at 4x (from 4), but 2x-4x together
+  name 50 of 73 against 17 of 23 at real time, on synthetic renders only
 - that `axis_spin_deg` is a spin count: it undercounts corks even on exact
-  poses; `spin_path_deg` is the count
+  poses; `spin_count_deg` over the air is the count (`spin_path_deg`, the
+  frame-to-frame path, over-reads by the pose's jitter)
 - that the camera turned by `camera_rotation_deg`: its magnitude assumes a
   focal a broadcast long lens can exceed tenfold
 

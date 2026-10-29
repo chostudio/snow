@@ -19,6 +19,7 @@ from torch import nn
 
 from . import events as E
 from . import inputs as I
+from . import noise as N
 from .data import check_no_leak, group_folds
 from .segmenter import WINDOW, Segmenter, build_model, parameter_count
 
@@ -76,7 +77,8 @@ def jitter(x: np.ndarray, rng: np.random.Generator, seen: np.ndarray) -> None:
 
 def sample_windows(clips: list[dict], mean: np.ndarray, std: np.ndarray,
                    rng: np.random.Generator, window: int = WINDOW,
-                   per_window: float = 8.0) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+                   per_window: float = 8.0, noise: "N.NoiseModel | None" = N.REAL_NOISE,
+                   ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """One epoch of training windows, freshly augmented.
 
     Per clip and segment: mirror with probability 0.5, stretch time by a
@@ -93,6 +95,10 @@ def sample_windows(clips: list[dict], mean: np.ndarray, std: np.ndarray,
             x, y = I.resample(source[rows], clip["y"][rows].astype(np.float32), factor)
             # No loss where there is no evidence (see inputs.observed).
             seen = I.observed(x[:, I.PRESENT], np.zeros(len(x), int)).astype(np.float32)
+            # Real-footage NIM noise (measured, see noise.py), then the
+            # generic jitter on top.
+            if noise is not None and rng.random() < N.APPLY_PROBABILITY:
+                N.apply(x, rng, seen > 0, noise)
             jitter(x, rng, seen > 0)
             x = (x - mean) / std
             n = len(x)
@@ -119,7 +125,8 @@ def sample_windows(clips: list[dict], mean: np.ndarray, std: np.ndarray,
 
 def fit(train: list[dict], arch: str = "tcn", epochs: int = 60, batch: int = 64,
         lr: float = 2e-3, seed: int = 0, window: int = WINDOW, device: str | None = None,
-        ignore: tuple[str, ...] = DEFAULT_IGNORE, log=print) -> Segmenter:
+        ignore: tuple[str, ...] = DEFAULT_IGNORE, noise: "N.NoiseModel | None" = N.REAL_NOISE,
+        log=print) -> Segmenter:
     torch.manual_seed(seed)
     rng = np.random.default_rng(seed)
     device = device or ("cuda" if torch.cuda.is_available() else "cpu")
@@ -139,7 +146,7 @@ def fit(train: list[dict], arch: str = "tcn", epochs: int = 60, batch: int = 64,
     live = torch.tensor(std < 1e8, dtype=torch.float32, device=device)
     for epoch in range(epochs):
         model.train()
-        x, y, m = sample_windows(train, mean, std, rng, window=window)
+        x, y, m = sample_windows(train, mean, std, rng, window=window, noise=noise)
         order = rng.permutation(len(x))
         total, count = 0.0, 0.0
         for k in range(0, len(order), batch):
@@ -162,7 +169,8 @@ def fit(train: list[dict], arch: str = "tcn", epochs: int = 60, batch: int = 64,
     return Segmenter(model=model, arch=arch, mean=mean, std=std, window=window,
                      info={"params": parameter_count(model), "epochs": epochs,
                            "train_clips": [c["name"] for c in train],
-                           "pos_fraction": float(pos), "ignore": list(ignore)})
+                           "pos_fraction": float(pos), "ignore": list(ignore),
+                           "noise": noise.__dict__ if noise is not None else None})
 
 
 # --- scoring -----------------------------------------------------------------
@@ -181,6 +189,7 @@ def score_clip(clip: dict, masks: dict[str, np.ndarray]) -> dict:
     truth = E.runs(clip["y"], clip["segment"])
     out = {"name": clip["name"], "group": clip["group"], "slowmo": clip["slowmo"],
            "kind": clip.get("kind"), "camera_angle": clip.get("camera_angle"),
+           "variant": clip.get("variant") or "",
            "frames": int(len(clip["y"])), "air_frames": int(clip["y"].sum())}
     for method, mask in masks.items():
         counts = E.frame_counts(mask, clip["y"])
@@ -261,6 +270,7 @@ def holdout_split(clips: list[dict], fraction: float, seed: int = 0,
 def evaluate(clips: list[dict], folds: int = 5, arch: str = "tcn", epochs: int = 60,
              seed: int = 0, window: int = WINDOW, holdout: float | None = None,
              keep_in_train: set[str] = frozenset(), ignore: tuple[str, ...] = DEFAULT_IGNORE,
+             noise: "N.NoiseModel | None" = N.REAL_NOISE,
              log=print) -> dict:
     """Held-out scores for every method on the same clips."""
     fixed = [c for c in clips if c.get("split") in ("train", "test")]
@@ -284,7 +294,7 @@ def evaluate(clips: list[dict], folds: int = 5, arch: str = "tcn", epochs: int =
             f"({len({c['group'] for c in test})} groups)")
         start = time.time()
         seg = fit(train, arch=arch, epochs=epochs, seed=seed + k, window=window,
-                  ignore=ignore, log=log)
+                  ignore=ignore, noise=noise, log=log)
         log(f"    trained in {time.time() - start:.0f}s")
         for clip in test:
             prob, mask = predict(seg, clip)
@@ -296,18 +306,23 @@ def evaluate(clips: list[dict], folds: int = 5, arch: str = "tcn", epochs: int =
             rows.append(row)
     return {"protocol": protocol, "arch": arch, "epochs": epochs, "window": window,
             "ignore": list(ignore),
+            "noise": noise.__dict__ if noise is not None else None,
             "params": parameter_count(build_model(arch, window=window)),
             "clips": len(clips), "groups": len({c["group"] for c in clips}),
-            "summary": summarise(rows), "per_clip": rows}
+            "summary": summarise(rows),
+            # The same scores per kind of clip, so a mix cannot hide a weak one.
+            "by_variant": {v: summarise([r for r in rows if r["variant"] == v])
+                           for v in sorted({r["variant"] for r in rows})},
+            "per_clip": rows}
 
 
-def report_table(result: dict) -> str:
+def report_table(result: dict, summary: dict | None = None) -> str:
     names = {"segmenter": f"segmenter ({result['arch']})", "hint": "airborne_hint (old)",
              "web": "dashboard detector", "always": "every seen frame (floor)"}
     lines = ["| method | frame F1 (95% CI) | precision | recall | airs found | split | false airs "
              "| takeoff err, median (mean) frames | landing err, median (mean) frames |",
              "|---|---|---|---|---|---|---|---|---|"]
-    for method, s in result["summary"].items():
+    for method, s in (summary or result["summary"]).items():
         lo, hi = s["frame_f1_ci95"]
         lines.append(
             f"| {names[method]} | {s['frame_f1']:.3f} ({lo:.3f} to {hi:.3f}) "

@@ -54,11 +54,17 @@ def cmd_evaluate(args: argparse.Namespace) -> int:
         keep = {c["name"] for c in json.loads(Path(args.keep_in_train).read_text())["clips"]}
     result = T.evaluate(clips, folds=args.folds, arch=args.arch, epochs=args.epochs,
                         seed=args.seed, window=args.window, holdout=args.holdout,
-                        keep_in_train=keep, ignore=tuple(args.ignore))
+                        keep_in_train=keep, ignore=tuple(args.ignore),
+                        noise=_noise(args.noise))
     T.save_result(result, Path(args.out))
     print(f"\n{result['protocol']}: {result['clips']} clips, {result['groups']} groups, "
           f"{result['arch']} with {result['params']:,} parameters\n")
     print(T.report_table(result))
+    for variant, summary in result.get("by_variant", {}).items():
+        if len(result.get("by_variant", {})) > 1:
+            clips = next(iter(summary.values()))["clips"]
+            print(f"\n{variant or 'unlabelled'} clips only ({clips}):\n")
+            print(T.report_table(result, summary))
     print(f"\nwrote {args.out}")
     return 0
 
@@ -69,11 +75,43 @@ def cmd_train(args: argparse.Namespace) -> int:
 
     clips = D.load_bundle(Path(args.bundle))
     seg = T.fit(clips, arch=args.arch, epochs=args.epochs, seed=args.seed, window=args.window,
-                ignore=tuple(args.ignore))
+                ignore=tuple(args.ignore), noise=_noise(args.noise))
     seg.info["bundle"] = str(args.bundle)
     seg.save(Path(args.out))
     print(f"{seg.arch}, {seg.info['params']:,} parameters, trained on {len(clips)} clips "
           f"-> {args.out}")
+    return 0
+
+
+def _noise(choice: str):
+    from . import noise as N
+
+    if choice == "off":
+        return None
+    if choice == "real":
+        return N.REAL_NOISE
+    return N.NoiseModel.load(Path(choice))
+
+
+def cmd_noise(args: argparse.Namespace) -> int:
+    """Measure real NIM noise on ground stretches and fit the augmentation."""
+    from . import data as D
+    from . import noise as N
+
+    real = N.summarise(N.real_stretches(args.spans))
+    names = sorted({N.parse_span(t)[0] for t in args.spans})
+    drops = N.clip_dropouts(names)
+    real.update(holes_per_frame=drops["holes_per_frame"], hole_mean_frames=drops["hole_mean_frames"])
+    print(f"dropouts over whole clips {names}: {drops['holes']} in {drops['frames']} frames")
+    clips = D.load_bundle(Path(args.bundle))
+    synth_runs = N.synthetic_ground(clips)
+    synth = N.summarise(synth_runs)
+    model = N.fit(real, synth_runs)
+    model.source = "fitted on " + ", ".join(args.spans)
+    print(json.dumps({"real": real, "synthetic_ground": synth}, indent=1))
+    print(json.dumps(model.__dict__, indent=1))
+    model.save(Path(args.out))
+    print(f"wrote {args.out}")
     return 0
 
 
@@ -106,6 +144,9 @@ def build_parser(parser: argparse.ArgumentParser | None = None) -> argparse.Argu
         p.add_argument("--epochs", type=int, default=60)
         p.add_argument("--seed", type=int, default=0)
         p.add_argument("--window", type=int, default=64, help="frames per training window")
+        p.add_argument("--noise", default="real",
+                       help="real-footage noise augmentation: real (the measured model in "
+                            "noise.py), off, or a noise_model.json from `snow segmenter noise`")
         p.add_argument("--ignore", nargs="*", default=["confidence", "pose"],
                        help="input channel name prefixes to blank (default: confidence "
                             "pose; pass --ignore with nothing to use every input)")
@@ -120,6 +161,15 @@ def build_parser(parser: argparse.ArgumentParser | None = None) -> argparse.Argu
         else:
             p.add_argument("--out", default=str(DEFAULT_WEIGHTS))
         p.set_defaults(func=func)
+
+    p = sub.add_parser("noise", help="measure real NIM noise on ground stretches, fit the "
+                                     "training augmentation")
+    p.add_argument("spans", nargs="+", help="clip:first-end frames that are plainly on the "
+                                            "snow, e.g. run1:460-495")
+    p.add_argument("--bundle", default=str(DEFAULT_BUNDLE),
+                   help="dataset bundle whose long-ground clips are the synthetic reference")
+    p.add_argument("--out", default=str(MODEL_DIR / "noise_model.json"))
+    p.set_defaults(func=cmd_noise)
 
     p = sub.add_parser("template", help="CSV template for hand-labelling real airs")
     p.add_argument("clips", nargs="*", help="clip names (default: every clip in data/clips)")

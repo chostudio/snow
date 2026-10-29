@@ -163,6 +163,15 @@ def pipeline_all(selected: list[Path], spacing_s: float | None = None) -> None:
             print(f"{clip.name}: pipeline failed ({exc}); continuing", file=sys.stderr)
 
 
+def clip_set(clip: Path) -> str:
+    """Which family a clip belongs to: the 20-trick validation set, or the
+    training set with short (original) or long (terrain) ground time."""
+    trick = json.loads((clip / "trick.json").read_text())
+    if not trick.get("group"):
+        return "validation"
+    return "long_ground" if trick.get("terrain") else "short_ground"
+
+
 def _plain(value):
     """numpy scalars as Python ones, so a cached ``False`` reads back false."""
     return value.item() if hasattr(value, "item") else str(value)
@@ -192,6 +201,8 @@ def results(selected: list[Path]) -> list[dict]:
             pair = json.loads(cache.read_text())
         else:
             pair = [compare.row(clip, "oracle", oracle), compare.row(clip, "pipeline", clip.name)]
+        for r in pair:
+            r["true_set"] = clip_set(clip)
         rows.extend(pair)
     (SYNTH_DIR / "results.json").write_text(json.dumps(rows, indent=2, default=_plain))
     return rows
