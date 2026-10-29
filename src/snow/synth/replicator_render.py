@@ -161,16 +161,19 @@ def main() -> None:
 
         def shoot(code: float):
             timeline.set_current_time(code / per_second)
-            # The first steps after attaching return an empty buffer while
-            # the render product warms up; step again until pixels arrive.
-            for _ in range(30):
+            # Steps return an empty buffer while RTX compiles its shaders in
+            # the background (minutes on a 4-vCPU box, once per process);
+            # keep stepping until pixels arrive.
+            deadline = time.monotonic() + 1800
+            while True:
                 rep.orchestrator.step(rt_subframes=args.subframes, delta_time=0.0,
                                       pause_timeline=True)
                 data = np.asarray(rgb.get_data())
                 if data.size:
                     break
-            else:
-                raise RuntimeError(f"{clip.name}: no pixels from the rgb annotator")
+                if time.monotonic() > deadline:
+                    raise RuntimeError(f"{clip.name}: no pixels from the rgb annotator")
+                time.sleep(1.0)
             image = data[..., :3].astype(np.float64) / 255.0
             return image, cam_params.get_data()
 
