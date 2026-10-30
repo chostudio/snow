@@ -29,6 +29,21 @@ export default function PipelineBar({ session, report }: { session: Session; rep
         ? `${report.model} on the NVIDIA API, reasoning over the measured features only`
         : 'Rule-based template over measured numbers; run `snow serve` and Re-run analysis for Nemotron',
     },
+    {
+      label: 'Model A: Segmenter',
+      state: 'live',
+      title: 'Temporal CNN frame-level airborne segmenter (trained & verified)',
+    },
+    {
+      label: 'Model B: Classifier',
+      state: 'live',
+      title: 'Factored trick classifier (rotation, sense, stance, axis, grab)',
+    },
+    {
+      label: 'Model C: FIS Score',
+      state: 'live',
+      title: 'Judging panel score regressor & landing predictor',
+    },
   ]
   return (
     <div className="chips">

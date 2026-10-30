@@ -12,6 +12,7 @@ from . import camera as cam
 from . import config as cfg
 from . import crop as cp
 from . import features as feat
+from . import harvest as harv
 from . import ingest as ing
 from . import meta as mt
 from . import pose as ps
@@ -626,6 +627,221 @@ def cmd_classify(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_harvest_search(args: argparse.Namespace) -> int:
+    cfg.ensure_dirs()
+    cache = harv.HarvestCache()
+    limiter = harv.PoliteRateLimiter(min_delay=args.min_delay, max_delay=args.max_delay)
+
+    print(f"Searching broadcasts: '{args.query}' (polite delay: {args.min_delay}-{args.max_delay}s)")
+    results = harv.search_youtube(
+        query=args.query,
+        limit=args.limit,
+        limiter=limiter,
+        cache=cache,
+        cookies_from_browser=args.cookies_from_browser,
+        cookies=args.cookies,
+        dry_run=args.dry_run,
+        no_cache=args.no_cache,
+    )
+
+    if not results:
+        if args.dry_run:
+            print("[dry-run] Dry-run search complete.")
+            return 0
+        print("No results found.")
+        return 0
+
+    print(f"\nFound {len(results)} broadcast replays:")
+    for i, r in enumerate(results, 1):
+        print(f"[{i}] {r.title} ({r.duration_str})")
+        print(f"    ID:      {r.id}")
+        print(f"    URL:     {r.url}")
+        print(f"    Channel: {r.uploader}")
+
+        if args.extract_tricks:
+            print(f"    Extracting transcript for {r.id}...")
+            cues = harv.fetch_transcript(
+                r.url,
+                limiter=limiter,
+                cache=cache,
+                cookies_from_browser=args.cookies_from_browser,
+                cookies=args.cookies,
+                dry_run=args.dry_run,
+                no_cache=args.no_cache,
+            )
+            mentions = harv.scan_transcript_for_tricks(cues)
+            candidates = harv.cluster_trick_windows(mentions)
+            if candidates:
+                print(f"    Detected {len(candidates)} trick windows:")
+                for c in candidates:
+                    print(f"      * {c.start_ts} - {c.end_ts} ({c.duration}s): {c.trick_name} [score: {c.score:.1f}]")
+                    print(f"        \"{c.transcript_excerpt[:100]}...\"")
+            else:
+                print("    No commentator trick callouts detected in transcript.")
+        print()
+    return 0
+
+
+def cmd_harvest_get(args: argparse.Namespace) -> int:
+    cfg.ensure_dirs()
+    cache = harv.HarvestCache()
+    limiter = harv.PoliteRateLimiter(min_delay=args.min_delay, max_delay=args.max_delay)
+
+    # Derive base name if not supplied
+    video_id = args.url
+    if "v=" in args.url:
+        video_id = args.url.split("v=")[1].split("&")[0]
+    elif "/" in args.url:
+        video_id = args.url.rstrip("/").split("/")[-1]
+    base_name = args.name or f"harvest_{video_id[:12]}"
+
+    print(f"Harvesting from: {args.url}")
+    print("Fetching transcript first to identify trick windows...")
+    cues = harv.fetch_transcript(
+        args.url,
+        limiter=limiter,
+        cache=cache,
+        cookies_from_browser=args.cookies_from_browser,
+        cookies=args.cookies,
+        dry_run=args.dry_run,
+        no_cache=args.no_cache,
+    )
+    mentions = harv.scan_transcript_for_tricks(cues)
+    candidates = harv.cluster_trick_windows(mentions)
+
+    if candidates:
+        print(f"Detected {len(candidates)} trick moments in commentator transcript:")
+        for idx, c in enumerate(candidates, 1):
+            print(f"  [{idx}] {c.start_ts} - {c.end_ts} ({c.duration}s): {c.trick_name} (score: {c.score:.1f})")
+            print(f"      Transcript: \"{c.transcript_excerpt[:120]}\"")
+    else:
+        print("No automated trick callouts detected in transcript.")
+
+    # If --auto-cut: cut all detected trick windows
+    if args.auto_cut:
+        if not candidates:
+            print("Error: --auto-cut requested but no tricks were found in transcript.", file=sys.stderr)
+            return 1
+        print(f"\nAuto-cutting {len(candidates)} clips into {cfg.CLIPS_DIR}...")
+        for idx, c in enumerate(candidates, 1):
+            safe_trick = re.sub(r"[^a-zA-Z0-9_-]", "_", c.trick_name.lower())[:30]
+            clip_name = f"{base_name}_{idx}_{safe_trick}"
+            print(f"\n[{idx}/{len(candidates)}] Harvesting '{clip_name}' ({c.start_ts}, {c.duration}s)...")
+            harv.harvest_clip(
+                url=args.url,
+                name=clip_name,
+                start=c.start_ts,
+                duration=str(c.duration),
+                fps=args.fps,
+                slowmo_factor=args.slowmo_factor,
+                limit_rate=args.limit_rate,
+                limiter=limiter,
+                cookies_from_browser=args.cookies_from_browser,
+                cookies=args.cookies,
+                dry_run=args.dry_run,
+                extra_meta={"trick": c.trick_name, "score": c.score, "transcript": c.transcript_excerpt},
+            )
+        print(f"\nAll {len(candidates)} clips harvested successfully.")
+        return 0
+
+    # Single clip harvest: either use explicit --start/--duration or select top candidate
+    start = args.start
+    duration = args.duration
+    extra_meta = {}
+
+    if not start or not duration:
+        if candidates:
+            top = max(candidates, key=lambda c: c.score)
+            print(f"\nUsing top detected trick: {top.trick_name} at {top.start_ts} ({top.duration}s)")
+            start = start or top.start_ts
+            duration = duration or str(top.duration)
+            extra_meta = {"trick": top.trick_name, "score": top.score, "transcript": top.transcript_excerpt}
+        else:
+            print("Error: No trick detected and --start / --duration not provided.", file=sys.stderr)
+            print("Please provide --start <time> and --duration <sec> manually.", file=sys.stderr)
+            return 1
+
+    print(f"\nHarvesting clip '{base_name}' ({start}, {duration}s)...")
+    dest = harv.harvest_clip(
+        url=args.url,
+        name=base_name,
+        start=start,
+        duration=duration,
+        fps=args.fps,
+        slowmo_factor=args.slowmo_factor,
+        limit_rate=args.limit_rate,
+        limiter=limiter,
+        cookies_from_browser=args.cookies_from_browser,
+        cookies=args.cookies,
+        dry_run=args.dry_run,
+        extra_meta=extra_meta,
+    )
+    if dest:
+        print(f"Successfully harvested {base_name} -> {dest}")
+    return 0
+
+
+def cmd_harvest_fis(args: argparse.Namespace) -> int:
+    cfg.ensure_dirs()
+    print(f"Cross-referencing FIS Big Air events (query='{args.event}', season={args.season or 'any'})...")
+    events = harv.search_fis_events(
+        query=args.event,
+        season=args.season,
+        gender=args.gender,
+        rider=args.rider,
+    )
+
+    if not events:
+        print("No matching FIS events found in scoring/data/jumps.csv.")
+        return 0
+
+    print(f"\nFound {len(events)} matching FIS Big Air events:")
+    for i, ev in enumerate(events[:10], 1):
+        gender_label = "Men" if ev["gender"] == "M" else "Women"
+        print(f"[{i}] {ev['season']} {ev['place']} - {ev['category']} ({gender_label}) - {ev['date']}")
+        print(f"    Riders recorded: {len(ev['riders'])} | Jumps: {ev['jumps_count']}")
+        if ev["top_tricks"]:
+            print("    Top scored tricks:")
+            for t in ev["top_tricks"][:4]:
+                dec = t["decoded"]
+                dec_str = f" ({dec.get('direction', '')} {dec.get('spin_deg', '')} {dec.get('grab', '')})" if dec else ""
+                print(f"      * {t['rider']}: {t['code']}{dec_str} - Score: {t['score']:.1f}")
+
+        queries = harv.build_fis_queries(ev)
+        print("    Suggested YouTube queries:")
+        for q in queries[:2]:
+            print(f"      - \"{q}\"")
+
+        if args.search and i == 1:
+            print(f"\nSearching YouTube for top event query: \"{queries[0]}\"...")
+            cache = harv.HarvestCache()
+            limiter = harv.PoliteRateLimiter(min_delay=args.min_delay, max_delay=args.max_delay)
+            vids = harv.search_youtube(
+                queries[0],
+                limit=args.limit,
+                limiter=limiter,
+                cache=cache,
+                cookies_from_browser=args.cookies_from_browser,
+                cookies=args.cookies,
+                dry_run=args.dry_run,
+                no_cache=args.no_cache,
+            )
+            for v in vids:
+                print(f"      Found: {v.title} ({v.duration_str}) - {v.url}")
+                if args.extract_tricks:
+                    cues = harv.fetch_transcript(
+                        v.url, limiter=limiter, cache=cache,
+                        cookies_from_browser=args.cookies_from_browser, cookies=args.cookies,
+                        dry_run=args.dry_run, no_cache=args.no_cache,
+                    )
+                    mentions = harv.scan_transcript_for_tricks(cues)
+                    candidates = harv.cluster_trick_windows(mentions)
+                    for c in candidates:
+                        print(f"        * {c.start_ts} - {c.end_ts}: {c.trick_name}")
+        print()
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="snow",
@@ -877,6 +1093,58 @@ def build_parser() -> argparse.ArgumentParser:
     p_cls.add_argument("--device", help="cuda or cpu (default: cuda if available)")
     p_cls.set_defaults(func=cmd_classify)
 
+    # snow harvest
+    p_harvest = sub.add_parser("harvest", help="safe anti-ban video harvester and FIS event matcher")
+    sub_harvest = p_harvest.add_subparsers(dest="harvest_cmd", required=True)
+
+    # snow harvest search <query>
+    p_hsearch = sub_harvest.add_parser("search", help="search YouTube for broadcast replays with rate limiting")
+    p_hsearch.add_argument("query", help="search terms, e.g. 'X Games 2024 snowboard big air'")
+    p_hsearch.add_argument("--limit", type=int, default=5, help="number of results")
+    p_hsearch.add_argument("--extract-tricks", "-t", action="store_true", help="scan transcripts for commentator trick callouts")
+    p_hsearch.add_argument("--min-delay", type=float, default=harv.DEFAULT_MIN_DELAY, help="min seconds between requests")
+    p_hsearch.add_argument("--max-delay", type=float, default=harv.DEFAULT_MAX_DELAY, help="max seconds between requests")
+    p_hsearch.add_argument("--cookies-from-browser", help="browser to extract cookies from (e.g. chrome, firefox)")
+    p_hsearch.add_argument("--cookies", help="path to custom cookies.txt file")
+    p_hsearch.add_argument("--no-cache", action="store_true", help="bypass local harvest cache")
+    p_hsearch.add_argument("--dry-run", action="store_true", help="preview search without network downloads")
+    p_hsearch.set_defaults(func=cmd_harvest_search)
+
+    # snow harvest get <url|id>
+    p_hget = sub_harvest.add_parser("get", help="transcript-first downloader: finds tricks and cuts NIM-ready clips")
+    p_hget.add_argument("url", help="YouTube URL or video ID")
+    p_hget.add_argument("--name", help="output clip name stem (in data/clips/<name>.mp4)")
+    p_hget.add_argument("--start", help="start timestamp (e.g. 00:01:23 or 83.0)")
+    p_hget.add_argument("--duration", help="clip length in seconds (e.g. 24 or 00:00:24)")
+    p_hget.add_argument("--auto-cut", action="store_true", help="automatically cut clips for all detected tricks")
+    p_hget.add_argument("--limit-rate", default=harv.DEFAULT_LIMIT_RATE, help="yt-dlp rate limit (default 3M)")
+    p_hget.add_argument("--fps", type=float, default=30.0, help="output frame rate CFR (default 30.0)")
+    p_hget.add_argument("--slowmo-factor", type=float, default=1.0, help="slow-motion factor (default 1.0)")
+    p_hget.add_argument("--min-delay", type=float, default=harv.DEFAULT_MIN_DELAY)
+    p_hget.add_argument("--max-delay", type=float, default=harv.DEFAULT_MAX_DELAY)
+    p_hget.add_argument("--cookies-from-browser", help="browser for cookies")
+    p_hget.add_argument("--cookies", help="cookies file")
+    p_hget.add_argument("--no-cache", action="store_true")
+    p_hget.add_argument("--dry-run", action="store_true", help="preview trick timestamps and commands without downloading")
+    p_hget.set_defaults(func=cmd_harvest_get)
+
+    # snow harvest fis <event>
+    p_hfis = sub_harvest.add_parser("fis", help="cross-reference FIS big air database and generate broadcast queries")
+    p_hfis.add_argument("event", nargs="?", default="", help="event keyword, place, or codex (e.g. 'Kreischberg', 'Chur')")
+    p_hfis.add_argument("--season", type=int, help="season year (e.g. 2021, 2024)")
+    p_hfis.add_argument("--gender", choices=["M", "W"], help="gender category")
+    p_hfis.add_argument("--rider", help="rider name filter")
+    p_hfis.add_argument("--search", action="store_true", help="search YouTube for matching broadcasts")
+    p_hfis.add_argument("--extract-tricks", "-t", action="store_true", help="scan transcripts for trick callouts")
+    p_hfis.add_argument("--limit", type=int, default=3, help="number of search results")
+    p_hfis.add_argument("--min-delay", type=float, default=harv.DEFAULT_MIN_DELAY)
+    p_hfis.add_argument("--max-delay", type=float, default=harv.DEFAULT_MAX_DELAY)
+    p_hfis.add_argument("--cookies-from-browser", help="browser for cookies")
+    p_hfis.add_argument("--cookies", help="cookies file")
+    p_hfis.add_argument("--no-cache", action="store_true")
+    p_hfis.add_argument("--dry-run", action="store_true")
+    p_hfis.set_defaults(func=cmd_harvest_fis)
+
     return parser
 
 
@@ -884,7 +1152,7 @@ def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     try:
         return args.func(args)
-    except (ing.IngestError, trk.TrackError, ps.PoseError, cp.CropError, CoachError) as exc:
+    except (ing.IngestError, trk.TrackError, ps.PoseError, cp.CropError, CoachError, harv.HarvestError) as exc:
         print(f"\nerror: {exc}", file=sys.stderr)
         return 1
 

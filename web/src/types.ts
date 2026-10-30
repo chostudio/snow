@@ -22,6 +22,24 @@ export interface ClipInfo {
   duration: number
 }
 
+export interface TrickClassifier {
+  spin_regressed_deg?: number
+  rotation?: { label: number; p: number }
+  sense?: { label: string; p: number }
+  stance?: { label: string; p: number }
+  axis?: { label: string; p: number }
+  grab?: { label: string; p: number }
+  direction?: string
+  name?: string
+}
+
+export interface TrickScoring {
+  trick_id: string
+  score_if_landed: number
+  p_land: number
+  expected_score: number
+}
+
 export interface EventMetrics {
   rotation_deg: number
   nearest_spin_deg: number
@@ -36,6 +54,8 @@ export interface EventMetrics {
   landing_knee_flex_deg: number
   rotation_decay_dps2: number
   mean_confidence: number
+  classifier?: TrickClassifier
+  scoring?: TrickScoring
 }
 
 export interface TrickEvent {

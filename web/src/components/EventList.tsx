@@ -27,6 +27,16 @@ export default function EventList({ session, selectedId, onSelect }: Props) {
                 {timecode(ev.t_start)} → {timecode(ev.t_end)}
               </span>
             </div>
+            {m.classifier?.name && (
+              <div style={{ fontSize: 11, color: 'var(--ink-2)', marginTop: 2, textAlign: 'left' }}>
+                🏷️ <strong>{m.classifier.name}</strong>
+              </div>
+            )}
+            {m.scoring && (
+              <div style={{ fontSize: 11, color: '#38bdf8', marginTop: 2, textAlign: 'left' }}>
+                🏅 FIS est: <strong>{m.scoring.score_if_landed} pts</strong> ({Math.round(m.scoring.p_land * 100)}% land)
+              </div>
+            )}
             <div className="event-grid">
               <div>
                 <strong>{signed(m.rotation_deg)}°</strong>measured

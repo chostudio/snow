@@ -41,6 +41,7 @@ labelled too, just without a skeleton or guesses.
 | `n` | new air |
 | `s` | skeleton overlay on / off |
 | `[` / `]` | jump to the selected air's takeoff / landing |
+| `d` | delete the selected air |
 
 ## Takeoff and landing
 

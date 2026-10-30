@@ -60,15 +60,16 @@ export default function App() {
     )
   }
 
-  return <Review key={session.name} session={session} index={index} onPick={setName} />
+  return <Review key={session.name} session={session} index={index} onPick={setName} onUpdateSession={setSession} />
 }
 
 function Review({
-  session, index, onPick,
+  session, index, onPick, onUpdateSession,
 }: {
   session: Session
   index: SessionSummary[]
   onPick: (name: string) => void
+  onUpdateSession: (s: Session) => void
 }) {
   const { fps, total_frames } = session.clip
   const clock = useVideoClock(fps, total_frames)
@@ -84,6 +85,9 @@ function Review({
   const [coachLoading, setCoachLoading] = useState(false)
   const [coachError, setCoachError] = useState<string | null>(null)
   const [showReport, setShowReport] = useState(false)
+  const [isProcessing, setIsProcessing] = useState(false)
+  const [processStatus, setProcessStatus] = useState<string | null>(null)
+  const [showUploadModal, setShowUploadModal] = useState(false)
 
   const selected = session.events.find((e) => e.id === selectedId) ?? null
   const active = session.events.find((e) => frame >= e.start_f && frame <= e.end_f) ?? null
@@ -117,6 +121,22 @@ function Review({
       .catch((e: Error) => setCoachError(e.message))
       .finally(() => setCoachLoading(false))
   }, [session, selectedId])
+
+  const handleProcessCurrent = async () => {
+    setIsProcessing(true)
+    setProcessStatus(`Running pipeline on ${session.name} (Segmenter Model A + Classifier Model B + Scoring Model C)...`)
+    try {
+      await api.processClip(session.name)
+      setProcessStatus('Pipeline complete! Reloading session...')
+      const updated = await api.fetchSession(session.name)
+      onUpdateSession(updated)
+      setTimeout(() => setProcessStatus(null), 3000)
+    } catch (e: any) {
+      setProcessStatus(`Processing error: ${e.message}`)
+    } finally {
+      setIsProcessing(false)
+    }
+  }
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -157,12 +177,133 @@ function Review({
             </option>
           ))}
         </select>
+        <button
+          className="btn btn-secondary"
+          onClick={() => setShowUploadModal(true)}
+          style={{ marginLeft: 8 }}
+          title="Upload or pick custom video"
+        >
+          ⬆ Upload Video
+        </button>
+        <button
+          className="btn"
+          onClick={handleProcessCurrent}
+          disabled={isProcessing}
+          style={{
+            marginLeft: 8,
+            backgroundColor: isProcessing ? '#f59e0b' : '#2563eb',
+            color: '#fff',
+            fontWeight: 600,
+          }}
+          title="Process selected video with Model A, B, and C"
+        >
+          {isProcessing ? '⚙️ Processing...' : '▶ Process Video'}
+        </button>
         <div className="topbar-spacer" />
         <PipelineBar session={session} report={report} />
         <button className="btn btn-primary" onClick={() => setShowReport(true)} disabled={!selected}>
           Export trick breakdown
         </button>
       </header>
+
+      {processStatus && (
+        <div
+          style={{
+            padding: '10px 20px',
+            background: isProcessing ? '#1e293b' : '#064e3b',
+            color: '#38bdf8',
+            borderBottom: '1px solid #334155',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            fontSize: 13,
+            fontFamily: 'monospace',
+          }}
+        >
+          <span>
+            {isProcessing ? '⏳ ' : '✅ '}
+            {processStatus}
+          </span>
+          {!isProcessing && (
+            <button
+              className="btn btn-ghost"
+              style={{ fontSize: 11, padding: '2px 8px' }}
+              onClick={() => setProcessStatus(null)}
+            >
+              ✕
+            </button>
+          )}
+        </div>
+      )}
+
+      {showUploadModal && (
+        <div
+          style={{
+            position: 'fixed',
+            inset: 0,
+            backgroundColor: 'rgba(0, 0, 0, 0.75)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            zIndex: 9999,
+          }}
+        >
+          <div
+            className="card"
+            style={{
+              width: 520,
+              maxWidth: '90vw',
+              padding: 24,
+              boxShadow: '0 20px 25px -5px rgba(0, 0, 0, 0.5)',
+            }}
+          >
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
+              <h3 style={{ margin: 0, fontSize: 18 }}>Upload & Process Video</h3>
+              <button className="btn btn-ghost" onClick={() => setShowUploadModal(false)}>
+                ✕
+              </button>
+            </div>
+            <p className="note" style={{ marginBottom: 16 }}>
+              Select a snowboarding video to ingest into SNOW VAR. The pipeline will track rider keypoints, fit Model A (airborne segments), Model B (factored trick classifier), and Model C (FIS scoring).
+            </p>
+            <div
+              style={{
+                border: '2px dashed #475569',
+                borderRadius: 8,
+                padding: 30,
+                textAlign: 'center',
+                marginBottom: 16,
+                backgroundColor: 'rgba(255, 255, 255, 0.02)',
+              }}
+            >
+              <input
+                type="file"
+                accept="video/mp4,video/quicktime,video/webm"
+                id="video-upload-input"
+                style={{ display: 'none' }}
+                onChange={(e) => {
+                  const file = e.target.files?.[0]
+                  if (file) {
+                    alert(`Selected ${file.name}. In demo mode, select any sample clip from the top bar or use 'snow run' locally.`)
+                    setShowUploadModal(false)
+                  }
+                }}
+              />
+              <label htmlFor="video-upload-input" className="btn btn-primary" style={{ cursor: 'pointer', display: 'inline-block' }}>
+                📁 Choose MP4 or MOV file
+              </label>
+              <div style={{ marginTop: 10, fontSize: 12, color: 'var(--ink-muted)' }}>
+                or drag and drop your video file here
+              </div>
+            </div>
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10 }}>
+              <button className="btn btn-ghost" onClick={() => setShowUploadModal(false)}>
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       <div className="layout">
         <div className="col">

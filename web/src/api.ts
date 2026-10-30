@@ -35,6 +35,39 @@ export function clipUrl(session: Session): string {
  * but the model fails or returns an invalid report, it throws with the
  * server's reason: the panel shows that error, never a template in its place.
  */
+export async function processClip(name: string): Promise<{ status: string; message: string }> {
+  const root = BASE.replace(/\/sessions\/?$/, '')
+  const res = await fetch(`${root}/api/process`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name }),
+  })
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ error: res.statusText }))
+    throw new Error(err.error || `${res.status} ${res.statusText}`)
+  }
+  return res.json()
+}
+
+export async function predictScore(
+  trick: string,
+  level: string = 'WC',
+  gender: string = 'M',
+  final: boolean = true
+): Promise<{ trick: string; score_if_landed: number; p_land: number; expected_score: number }> {
+  const root = BASE.replace(/\/sessions\/?$/, '')
+  const res = await fetch(`${root}/api/score`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ trick, level, gender, final }),
+  })
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ error: res.statusText }))
+    throw new Error(err.error || `${res.status} ${res.statusText}`)
+  }
+  return res.json()
+}
+
 export async function fetchCoachReport(session: Session, eventId?: string): Promise<CoachReport> {
   let res: Response
   try {

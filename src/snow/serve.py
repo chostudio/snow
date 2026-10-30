@@ -20,6 +20,7 @@ from __future__ import annotations
 import json
 import mimetypes
 import re
+import subprocess
 import sys
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -68,12 +69,19 @@ def make_handler(sessions_dir: Path, coach_fn=coach.coach_session):
         def do_GET(self) -> None:  # noqa: N802
             if self.path.split("?", 1)[0] == "/index.json":
                 return self._file(sessions_dir / "index.json")
+            if self.path.split("?", 1)[0] == "/api/sessions":
+                return self._file(sessions_dir / "index.json")
             route = _route(self.path)
             if not route or route[1] not in FILES:
                 return self._json(404, {"error": f"no route {self.path}"})
             self._file(sessions_dir / route[0] / route[1])
 
         def do_POST(self) -> None:  # noqa: N802
+            clean_path = self.path.split("?", 1)[0]
+            if clean_path == "/api/process":
+                return self._process()
+            if clean_path == "/api/score":
+                return self._score()
             route = _route(self.path)
             if not route or route[1] != "coach":
                 return self._json(404, {"error": f"no route {self.path}"})
@@ -96,6 +104,72 @@ def make_handler(sessions_dir: Path, coach_fn=coach.coach_session):
                 self.log_message("coach failed: %s", exc)
                 return self._json(502, {"error": str(exc)})
             self._json(200, report)
+
+        def _score(self) -> None:
+            """Live score prediction from Model C (FIS judging model)."""
+            try:
+                length = int(self.headers.get("Content-Length") or 0)
+                body = json.loads(self.rfile.read(length) or b"{}")
+                trick = body.get("trick", "b-DC-10-Wed")
+                cat_code = body.get("level", "WC")
+                round_name = "Final" if body.get("final", True) else "Qual"
+                gender = body.get("gender", "M")
+            except Exception as exc:
+                return self._json(400, {"error": f"invalid request: {exc}"})
+
+            model_path = cfg.DATA_DIR / "models" / "scoring" / "model.joblib"
+            if not model_path.exists():
+                return self._json(503, {"error": "Model C scoring model not found"})
+            try:
+                import joblib
+                import pandas as pd
+                sys.path.insert(0, str(cfg.REPO_ROOT / "scoring"))
+                from train import features as scoring_features
+
+                bundle = joblib.load(model_path)
+                df = pd.DataFrame([{"trick": trick, "cat_code": cat_code, "round": round_name, "gender": gender}])
+                feat = scoring_features(df, categories=bundle["categories"])
+                score_val = float(bundle["score"].predict(feat)[0])
+                p_land_val = float(bundle["landed"].predict_proba(feat)[0, 1])
+
+                return self._json(200, {
+                    "trick": trick,
+                    "score_if_landed": round(score_val, 1),
+                    "p_land": round(p_land_val, 3),
+                    "expected_score": round(score_val * p_land_val, 1),
+                })
+            except Exception as exc:
+                return self._json(500, {"error": str(exc)})
+
+        def _process(self) -> None:
+            """Trigger analysis pipeline / export for a clip."""
+            try:
+                length = int(self.headers.get("Content-Length") or 0)
+                body = json.loads(self.rfile.read(length) or b"{}")
+                clip_name = body.get("name")
+            except Exception as exc:
+                return self._json(400, {"error": f"invalid request: {exc}"})
+
+            if not clip_name or not NAME.match(clip_name):
+                return self._json(400, {"error": f"invalid clip name {clip_name!r}"})
+
+            # Check if poses exist
+            pose_file = cfg.DATA_DIR / "poses" / f"{clip_name}.json"
+            clip_file = cfg.DATA_DIR / "clips" / f"{clip_name}.mp4"
+            if not pose_file.exists() or not clip_file.exists():
+                return self._json(404, {"error": f"clip or poses missing for {clip_name}"})
+
+            try:
+                # Re-run features with segmenter and export session with classifier
+                segmenter_pt = cfg.WEIGHTS_DIR / "segmenter.pt"
+                seg_arg = f"--segmenter {segmenter_pt}" if segmenter_pt.exists() else ""
+                cmd = f"source {cfg.REPO_ROOT}/.venv/bin/activate && cd {cfg.REPO_ROOT} && snow features {clip_name} {seg_arg} && python web/tools/export_session.py {clip_name} --classify"
+                res = subprocess.run(["bash", "-c", cmd], capture_output=True, text=True, timeout=120)
+                if res.returncode != 0:
+                    return self._json(500, {"error": f"pipeline processing failed: {res.stderr or res.stdout}"})
+                return self._json(200, {"status": "ok", "name": clip_name, "message": "processed successfully"})
+            except Exception as exc:
+                return self._json(500, {"error": str(exc)})
 
         def _file(self, path: Path) -> None:
             if not path.is_file():

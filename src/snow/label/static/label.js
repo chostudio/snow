@@ -294,7 +294,16 @@ function drawTimeline() {
 
 timeline.addEventListener("click", (e) => {
   const r = timeline.getBoundingClientRect();
-  seek(Math.floor(((e.clientX - r.left) / r.width) * S.info.frames));
+  const f = Math.floor(((e.clientX - r.left) / r.width) * S.info.frames);
+  seek(f);
+  const hit = S.airs.find((a) => {
+    const t = int(a.takeoff_frame), l = int(a.landing_frame);
+    return t !== null && l !== null && f >= t && f <= l;
+  });
+  if (hit && S.sel !== hit._id) {
+    S.sel = hit._id;
+    renderAirs();
+  }
 });
 
 // ---- machine guesses ---------------------------------------------------------------
@@ -426,6 +435,7 @@ function renderAirs() {
     drawTimeline();
     return;
   }
+  S.airs.sort((a, b) => (int(a.takeoff_frame) ?? 1e9) - (int(b.takeoff_frame) ?? 1e9));
   el.innerHTML = S.airs.map((a, k) => {
     const t = int(a.takeoff_frame), l = int(a.landing_frame);
     const len = t !== null && l !== null ? `${l - t} frames` : "";
@@ -447,7 +457,7 @@ function renderAirs() {
     return `<div class="air${a._id === S.sel ? " selected" : ""}" data-air="${a._id}">
       <div class="air-head"><span class="title">Air ${k + 1}</span><span class="name">${esc(trickName(a))}</span>
         <small>${len}</small>
-        <button class="danger" data-delete="${a._id}" style="margin-left:auto">delete</button></div>
+        <button class="danger" data-delete="${a._id}" data-air="${a._id}" style="margin-left:auto">delete</button></div>
       <div class="row"><span class="lbl">takeoff<a href="#" data-guide="takeoff-and-landing">?</a></span>
         <input type="number" min="0" data-air="${a._id}" data-input="takeoff_frame" value="${esc(a.takeoff_frame)}">
         <button data-set="takeoff_frame" data-air="${a._id}">set here (t)</button>
@@ -473,7 +483,10 @@ function renderAirs() {
 
 function bindAirs() {
   const el = $("#airs");
-  const find = (node) => S.airs.find((a) => a._id === +node.dataset.air);
+  const find = (node) => {
+    const id = +(node.dataset.air || node.dataset.delete || node.closest("[data-air]")?.dataset.air);
+    return S.airs.find((a) => a._id === id);
+  };
   el.querySelectorAll(".air").forEach((card) => card.addEventListener("click", () => {
     if (S.sel !== +card.dataset.air) {
       S.sel = +card.dataset.air;
@@ -483,32 +496,36 @@ function bindAirs() {
   }));
   el.querySelectorAll(".chip").forEach((b) => b.addEventListener("click", () => {
     const a = find(b);
+    if (!a) return;
     a[b.dataset.field] = a[b.dataset.field] === b.dataset.value ? "" : b.dataset.value;
     changed(a, true);
   }));
   el.querySelectorAll("[data-input]").forEach((inp) => inp.addEventListener("input", () => {
     const a = find(inp);
+    if (!a) return;
     a[inp.dataset.input] = inp.value;
     changed(a, false);
   }));
   el.querySelectorAll("[data-input]").forEach((inp) => inp.addEventListener("change", () => renderAirs()));
   el.querySelectorAll("[data-sure]").forEach((inp) => inp.addEventListener("change", () => {
     const a = find(inp);
+    if (!a) return;
     a.sure = inp.checked ? "n" : "y";
     changed(a, false);
   }));
   el.querySelectorAll("[data-set]").forEach((b) => b.addEventListener("click", () => setFrame(find(b), b.dataset.set)));
   el.querySelectorAll("[data-jump]").forEach((b) => b.addEventListener("click", () => {
-    const v = int(find(b)[b.dataset.jump]);
+    const a = find(b);
+    if (!a) return;
+    const v = int(a[b.dataset.jump]);
     if (v !== null) seek(v);
   }));
   el.querySelectorAll("[data-delete]").forEach((b) => b.addEventListener("click", (e) => {
     e.stopPropagation();
     const a = find(b);
-    if (!confirm(`Delete this air (frames ${a.takeoff_frame || "?"} to ${a.landing_frame || "?"})?`)) return;
-    S.airs = S.airs.filter((x) => x !== a);
-    S.sel = S.airs.length ? S.airs[S.airs.length - 1]._id : null;
-    changed(null, true);
+    if (!a) return;
+    if ((a.takeoff_frame || a.landing_frame) && !confirm(`Delete this air (frames ${a.takeoff_frame || "?"} to ${a.landing_frame || "?"})?`)) return;
+    deleteAir(a);
   }));
   el.querySelectorAll("[data-guide]").forEach((l) => l.addEventListener("click", (e) => {
     e.preventDefault();
@@ -516,8 +533,26 @@ function bindAirs() {
   }));
 }
 
+function deleteAir(a) {
+  if (!a) return;
+  delete S.readings[a._id];
+  clearTimeout(S.readingTimers[a._id]);
+  S.airs = S.airs.filter((x) => x._id !== a._id);
+  S.sel = S.airs.length ? S.airs[S.airs.length - 1]._id : null;
+  changed(null, true);
+}
+
 function setFrame(air, field) {
-  if (!air) air = addAir();
+  if (!air) {
+    air = addAir();
+  } else if (field === "takeoff_frame") {
+    // If this air already has a landing and current frame is after that landing,
+    // the user is marking the takeoff of the NEXT air!
+    const l = int(air.landing_frame);
+    if (l !== null && S.frame > l) {
+      air = addAir();
+    }
+  }
   air[field] = String(S.frame);
   S.sel = air._id;
   changed(air, true);
@@ -656,6 +691,9 @@ document.addEventListener("keydown", (e) => {
     "[": () => { const a = selected(); if (a && int(a.takeoff_frame) !== null) seek(int(a.takeoff_frame)); },
     "]": () => { const a = selected(); if (a && int(a.landing_frame) !== null) seek(int(a.landing_frame)); },
     1: () => setSpeed("0.125"), 2: () => setSpeed("0.25"), 3: () => setSpeed("0.5"), 4: () => setSpeed("1"),
+    d: () => deleteAir(selected()),
+    Delete: () => deleteAir(selected()),
+    Backspace: () => deleteAir(selected()),
   }[e.key.length === 1 ? e.key.toLowerCase() : e.key];
   if (handled) {
     e.preventDefault();

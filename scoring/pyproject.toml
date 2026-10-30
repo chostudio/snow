@@ -1,0 +1,21 @@
+[project]
+name = "snow-scoring"
+version = "0.1.0"
+description = "Big air judging-score model trained on official FIS results (trick ID -> score)"
+requires-python = ">=3.10,<3.13"
+dependencies = [
+    "pdfplumber>=0.11",
+    "pandas>=2.2",
+    "numpy>=1.26,<2",
+    "scikit-learn>=1.5",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0"]
+
+[tool.uv]
+package = false
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]

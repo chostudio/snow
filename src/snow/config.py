@@ -13,6 +13,7 @@ DATA_DIR = REPO_ROOT / "data"
 CLIPS_DIR = DATA_DIR / "clips"
 POSES_DIR = DATA_DIR / "poses"
 WEIGHTS_DIR = DATA_DIR / "weights"
+HARVEST_DIR = DATA_DIR / "harvest"
 VENDOR_CLIENT = REPO_ROOT / "vendor" / "nim-clients" / "body-pose" / "scripts" / "body_pose.py"
 
 # The hosted NVCF endpoint rejects anything larger. Stay under it with margin:
@@ -73,5 +74,5 @@ def pose_path(name: str) -> Path:
 
 
 def ensure_dirs() -> None:
-    for d in (CLIPS_DIR, POSES_DIR, WEIGHTS_DIR):
+    for d in (CLIPS_DIR, POSES_DIR, WEIGHTS_DIR, HARVEST_DIR):
         d.mkdir(parents=True, exist_ok=True)

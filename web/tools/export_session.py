@@ -590,6 +590,68 @@ def rule_based_coach(events: list[dict], clip: dict, measure: str) -> dict:
     }
 
 
+def score_events(name: str, events: list[dict]) -> str:
+    """Add Model C's FIS judging score prediction to each air, when available."""
+    model_path = REPO / "data" / "models" / "scoring" / "model.joblib"
+    if not model_path.exists():
+        return "unavailable (no scoring model)"
+    try:
+        import joblib
+        import pandas as pd
+        sys.path.insert(0, str(REPO / "scoring"))
+        from train import features as scoring_features
+    except Exception as exc:
+        return f"unavailable ({exc})"
+
+    try:
+        scoring_bundle = joblib.load(model_path)
+        categories = scoring_bundle["categories"]
+        score_model = scoring_bundle["score"]
+        landed_model = scoring_bundle["landed"]
+
+        for e in events:
+            m = e.get("metrics", {})
+            clf = m.get("classifier", {})
+            # Construct a canonical Trick ID or use components
+            spin = clf.get("rotation", {}).get("label") or m.get("nearest_spin_deg", 720)
+            axis = clf.get("axis", {}).get("label") or "flat"
+            grab = clf.get("grab", {}).get("label") or "none"
+            direction = clf.get("direction") or m.get("direction", "frontside")
+            
+            # Map components to shorthand trick token for scoring/tricks.py
+            dir_code = "b" if "back" in str(direction).lower() else "f"
+            axis_code = "T" if "triple" in axis else ("D" if "double" in axis else ("C" if "cork" in axis else ""))
+            spin_code = str(spin // 100) if spin >= 100 else str(spin)
+            grab_code = grab[:2].capitalize() if grab and grab != "none" else ""
+            
+            parts = [dir_code]
+            if axis_code:
+                parts.append(axis_code)
+            parts.append(spin_code)
+            if grab_code:
+                parts.append(grab_code)
+            trick_id = "-".join(parts)
+
+            df = pd.DataFrame([{
+                "trick": trick_id,
+                "cat_code": "WC",
+                "round": "Final",
+                "gender": "M"
+            }])
+            feat_df = scoring_features(df, categories=categories)
+            score_pred = float(score_model.predict(feat_df)[0])
+            p_land = float(landed_model.predict_proba(feat_df)[0, 1])
+            m["scoring"] = {
+                "trick_id": trick_id,
+                "score_if_landed": round(score_pred, 1),
+                "p_land": round(p_land, 3),
+                "expected_score": round(score_pred * p_land, 1),
+            }
+        return "model-c (FIS big air judge model)"
+    except Exception as exc:
+        return f"error ({exc})"
+
+
 def classify_events(name: str, events: list[dict]) -> str:
     """Add model B's trick reading to each air, when weights exist.
 
@@ -666,8 +728,10 @@ def main(name: str, coach: str = "rule-based", detector: str = "auto",
     air_source = ("segmenter" if detector != "rate" and recs and all("airborne" in r for r in recs)
                   else "rate")
     classifier_source = classify_events(name, events) if classify else "off"
+    scoring_source = score_events(name, events)
     if classify:
         print(f"  classifier: {classifier_source}")
+    print(f"  scoring: {scoring_source}")
 
     ids = [r["f"] for r in recs]
     gaps = [[a + 1, b - 1] for a, b in zip(ids, ids[1:]) if b - a > 1]
@@ -684,6 +748,7 @@ def main(name: str, coach: str = "rule-based", detector: str = "auto",
             "pose": "nvidia-body-pose-nim",
             "air_detector": air_source,
             "classifier": classifier_source,
+            "scoring": scoring_source,
         },
         "skeleton": {"parents": PARENTS, "links": LINKS, "joints": J, "num_joints": len(PARENTS)},
         "gaps": gaps,
