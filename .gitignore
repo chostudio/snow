@@ -1,5 +1,6 @@
 # secrets
 .env
+.DS_Store
 
 # vendored upstream client (fetched by scripts/setup.sh)
 vendor/
@@ -7,6 +8,7 @@ vendor/
 # data + model artifacts
 data/
 *.mp4
+!docs/media/snow_demo_walkthrough_34s.mp4
 *.webm
 *.mkv
 *.jsonl

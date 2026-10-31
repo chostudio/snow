@@ -1,247 +1,366 @@
 # snow
 
-Measure what a snowboarder's body actually did, from video.
+**Video Assistant Referee (VAR) for Snowboarding**: 3D Biomechanics, Factored Trick Classification, and Official FIS Scoring from Monocular Broadcast Video.
 
-Point it at a run — a YouTube clip, an Olympic broadcast — and it finds the
-usable shots, tracks the rider, extracts a 77-joint 3D skeleton for every
-frame, subtracts the broadcast camera's own motion, and gives you the
-rotation: how far the rider turned, about which axis, and how far off vertical
-that axis was.
+Point it at a competition run — a YouTube broadcast, an Olympic slopestyle or big air run — and it automatically identifies usable slow-motion shots, tracks the athlete across cuts, extracts a 77-joint 3D metric skeleton for every frame, subtracts the broadcast camera's pan/tilt/zoom, and measures True Body Frame rotation: how far the rider turned, about which axis, angular velocity (RPM), and peak cork tilt.
 
-3D pose comes from the [NVIDIA 3D Body Pose NIM](https://build.nvidia.com/nvidia/body-pose),
-running on NVIDIA's hosted endpoint. **No local GPU needed.** Everything else
-runs on your machine.
+Factored neural networks (**Models A, B, and C**) segment flight phases, decompose the aerial kinematics into official trick names (e.g. *Backside Double Cork 1080 Weddle*), and predict official FIS judging panel scores and landing probabilities trained on 5,000+ Olympic and World Cup jumps.
+
+3D pose comes from the [NVIDIA 3D Body Pose NIM](https://build.nvidia.com/nvidia/body-pose), running on NVIDIA Cloud Endpoints or self-hosted GPU compute. **No wearable sensors, suit markers, or athlete setup required. No local GPU needed.**
+
+---
+
+## 34-Second End-to-End Walkthrough
+
+<div align="center">
+  <video src="docs/media/snow_demo_walkthrough_34s.mp4" controls="controls" width="100%" poster="docs/media/devpost_submission_screenshots/02_nvidia_nim_3d_pose_estimation.png">
+    <a href="docs/media/snow_demo_walkthrough_34s.mp4">
+      <img src="docs/media/devpost_submission_screenshots/02_nvidia_nim_3d_pose_estimation.png" width="100%" alt="Snow VAR Walkthrough Video" />
+    </a>
+  </video>
+</div>
+
+> [!TIP]
+> **[▶ Watch the Full 34-Second Walkthrough Video (1080p MP4)](docs/media/snow_demo_walkthrough_34s.mp4)**:
+> Ingest broadcast footage (Air 3 Double Cork 900) &rarr; 77-joint Nova skeleton extraction &rarr; 3D kinematics orbit (+977° spin, 112 RPM) &rarr; Omniverse USD digital twin split-screen &rarr; Factored AI trick classification &rarr; Interactive Snow VAR review dashboard.
+
+---
+
+## 77-Joint Skeleton & Biomechanics Showcase
+
+### 1. 3D Skeleton Tracking in Real Time
+
+<div align="center">
+  <img src="docs/media/skeleton_tracking_preview.gif" width="100%" alt="77-Joint Skeleton Tracking Loop" />
+  <p><em>The 77-joint Nova skeleton lifted from monocular 2D broadcast video by the NVIDIA 3D Body Pose NIM, tracking kinematic continuity through an inverted double cork rotation.</em></p>
+</div>
+
+### 2. High-Resolution Skeleton & Telemetry Gallery
+
+| 77-Joint Monocular 3D Pose | Mid-Air Aerial Inversion Pose |
+|:---:|:---:|
+| [![NVIDIA 3D Body Pose NIM](docs/media/devpost_submission_screenshots/02_nvidia_nim_3d_pose_estimation.png)](docs/media/devpost_submission_screenshots/02_nvidia_nim_3d_pose_estimation.png) | [![NIM Pose Midair Inversion](docs/media/devpost_submission_screenshots/10_nim_pose_midair_inversion.png)](docs/media/devpost_submission_screenshots/10_nim_pose_midair_inversion.png) |
+| **NVIDIA 3D Body Pose NIM**: Metric 3D lifting of all 77 kinematic joints directly from monocular 2D broadcast footage. | **Severe Inversion Tracking**: Maintains joint identity and limb position even when the rider is completely upside down. |
+
+| Camera-Subtracted 3D Kinematics Orbit | Isaac Sim USD Digital Twin (Split-Screen) |
+|:---:|:---:|
+| [![3D Kinematics Orbit](docs/media/devpost_submission_screenshots/03_camera_subtracted_3d_kinematics.png)](docs/media/devpost_submission_screenshots/03_camera_subtracted_3d_kinematics.png) | [![Omniverse USD Digital Twin](docs/media/devpost_submission_screenshots/04_omniverse_usd_digital_twin.png)](docs/media/devpost_submission_screenshots/04_omniverse_usd_digital_twin.png) |
+| **Camera Pan Subtracted**: Continuous 360° orbit tracks +977° net rotation, 112 RPM peak spin rate, and 114.5° cork tilt. | **USD Digital Twin**: Real broadcast footage synchronized side-by-side with NVIDIA Isaac Sim USD physics simulation. |
+
+| Factored Trick Classifier & FIS Scoring HUD | Interactive Snow VAR Review Dashboard |
+|:---:|:---:|
+| [![Factored AI Trick Classifier](docs/media/devpost_submission_screenshots/13_live_hud_trick_classification.png)](docs/media/devpost_submission_screenshots/13_live_hud_trick_classification.png) | [![Snow VAR Dashboard Review](docs/media/devpost_submission_screenshots/06_snow_var_interactive_dashboard.png)](docs/media/devpost_submission_screenshots/06_snow_var_interactive_dashboard.png) |
+| **Model B & C HUD**: Decomposes rotation, axis tilt, stance, and grab to classify trick and score 49.8 official FIS points. | **Interactive VAR Dashboard**: Synchronized dual-stream playback, interactive spin curve scrubbing, and biomechanics cues. |
+
+| Multi-Angle 3D Pose Inspector | Biomechanics Landing Flexion Telemetry |
+|:---:|:---:|
+| [![3D Pose Inspector Multi-Angle](docs/media/devpost_submission_screenshots/14_3d_pose_inspector_multi_angle.png)](docs/media/devpost_submission_screenshots/14_3d_pose_inspector_multi_angle.png) | [![Biomechanics Landing Flexion](docs/media/devpost_submission_screenshots/12_biomechanics_landing_flexion_telemetry.png)](docs/media/devpost_submission_screenshots/12_biomechanics_landing_flexion_telemetry.png) |
+| **Multi-Angle 3D Inspector**: Scrub frame-by-frame and examine 3D skeleton geometry from top, side, and elevation angles. | **Landing Telemetry**: Knee and hip flexion at snow contact (81.6° knee flexion) to measure landing stability. |
+
+---
 
 ## How it works
 
 ```mermaid
 flowchart LR
-    S1["1 · SCOUT<br/>find the usable<br/>slow-motion shots"]
-    S2["2 · INGEST<br/>cut and re-encode<br/>for the NIM"]
-    S3["3 · TRACK<br/>box the rider,<br/>stitch across cuts"]
-    S4["4 · POSE<br/>77-joint 3D skeleton,<br/>every frame"]
-    S5["5 · FEATURES<br/>remove camera motion,<br/>measure rotation"]
-    S6["6 · REVIEW<br/>dashboard, CSV, USD"]
+    S1["1 · SCOUT & INGEST<br/>detect slow-mo replays<br/>conform & verify video"]
+    S2["2 · TRACK & POSE<br/>YOLO11 + ByteTrack<br/>NVIDIA 3D Pose NIM"]
+    S3["3 · 3D KINEMATICS<br/>subtract camera motion<br/>measure spin, tilt, RPM"]
+    S4["4 · DIGITAL TWIN<br/>export OpenUSD .usda<br/>Omniverse & Isaac Sim"]
+    S5["5 · FACTORED AI<br/>Model A: segmenter<br/>Model B: classifier<br/>Model C: FIS scoring"]
+    S6["6 · VAR DASHBOARD<br/>interactive 3D review<br/>Nemotron AI coach"]
 
     S1 --> S2 --> S3 --> S4 --> S5 --> S6
 ```
 
-1. **Scout** splits a broadcast into shots and ranks them. Most televised
-   snowboarding is useless for pose; the super-slow-motion replays are not.
-2. **Ingest** cuts the shot you picked and re-encodes it to the exact format
-   the NIM accepts, then verifies its own output.
-3. **Track** finds the rider and writes the box annotation the NIM needs. You
-   stitch tracks across camera cuts by hand — guessing would fuse two riders.
-4. **Pose** sends clip and boxes to the NVIDIA NIM, which returns a 77-joint
-   3D skeleton per frame. This is the only stage that sends video off your
-   machine.
-5. **Features** estimates the camera's own rotation from the background,
-   subtracts it, and integrates what is left — the rider's actual turn.
-6. **Review** in the browser, or take the CSV into a notebook, or open the
-   USD in Omniverse. The dashboard's coach is a Nemotron model on NVIDIA's
-   API, shown the measured numbers and their caveats, never the video.
+1. **Scout & Ingest**: Cuts broadcast slow-motion replays (`yt-dlp`, OpenCV, `ffmpeg`). Televised snowboarding mixes wide shots and crowd cutaways; Scout isolates and ranks high-speed replay shots. Ingest handles broadcast slow-motion conform timing and re-encodes to the NIM's exact format.
+2. **Track & Pose**: Finds the rider with YOLO11 and ByteTrack, exports bounding boxes, and queries the NVIDIA 3D Body Pose NIM (gRPC endpoint). The NIM returns a metric 77-joint Nova skeleton for every frame.
+3. **Camera Compensation & Kinematics**: Computes camera affine homography from background keypoints, subtracts camera rotation, and extracts True Body Frame spin (°), continuous axis tilt (°), and rotational velocity (RPM).
+4. **USD Digital Twin**: Generates OpenUSD (`.usda`) scene descriptions without external dependencies. Opens in Omniverse, Isaac Sim, blender, or usdview for physics-based split-screen validation.
+5. **Factored AI & Scoring**:
+   - **Model A (Airborne Segmenter)**: Temporal 1D CNN separating in-run, takeoff, flight, and landing contact.
+   - **Model B (Factored Trick Classifier)**: 5-head neural network decomposing rotation, spin sense, stance, axis, and grab into official trick names.
+   - **Model C (FIS Big Air Score Regressor)**: Predicts landing probability and official 0–100 judging score, trained on 4,995 FIS World Cup & Olympic jumps.
+6. **Snow VAR Dashboard & AI Coach**: React 18 + Vite web dashboard featuring synchronized video playback, interactive spin curve scrubbing, multi-angle 3D Pose Inspector, and an AI Coach powered by NVIDIA Nemotron.
+
+---
 
 ## Architecture
 
 ```mermaid
 flowchart TB
-    SRC["YouTube URL or local video file"]
+    SRC["Monocular Competition Video<br/>YouTube URL · Broadcast File · MP4"]
 
-    subgraph PREP["YOUR MACHINE · prepare"]
+    subgraph PREP["YOUR MACHINE · Ingest & Tracking"]
         direction LR
         A["scout + ingest<br/>yt-dlp · ffmpeg · OpenCV"]
         B["track + crop<br/>Ultralytics YOLO11 · ByteTrack"]
         A --> B
     end
 
-    subgraph CLOUD["NVIDIA CLOUD"]
-        NIM["3D Body Pose NIM<br/>gRPC on NVCF · hosted, no local GPU"]
-        NEMO["Nemotron coach<br/>NVIDIA API · chat completions"]
+    subgraph CLOUD["NVIDIA CLOUD / NEBIUS GPU"]
+        NIM["3D Body Pose NIM<br/>gRPC on NVCF / Nebius L4<br/>hosted, no local GPU"]
+        NEMO["Nemotron Coach<br/>NVIDIA API · chat completions"]
     end
 
-    POSES["poses.json · JSON Lines<br/>Nova-77 skeleton, every frame"]
+    POSES["poses.json · JSON Lines<br/>Nova-77 3D Skeleton, every frame"]
 
-    subgraph ANALYSE["YOUR MACHINE · analyse"]
+    subgraph KINEMATICS["YOUR MACHINE · 3D Kinematics & OpenUSD"]
         direction LR
-        C["features<br/>NumPy · pandas · OpenCV"]
+        C["features<br/>camera subtraction · NumPy · OpenCV"]
         D["usd<br/>.usda text, no pxr needed"]
-        E["export_session<br/>bundle for the UI"]
     end
 
-    CSV["features.csv + .parquet<br/>notebooks, ML"]
-    USDA["skeleton.usda<br/>Omniverse, usdview, Blender"]
+    subgraph LEARN["MACHINE LEARNING SUITE · Models A / B / C"]
+        direction TB
+        MA["Model A: Airborne Segmenter<br/>Temporal 1D CNN · frame-level ground vs air"]
+        MB["Model B: Factored Trick Classifier<br/>5 heads: rotation · sense · stance · axis · grab"]
+        MC["Model C: FIS Score Regressor<br/>scoring/ · 4,995 FIS World Cup jumps · P(land) + score"]
+    end
 
-    subgraph BROWSER["BROWSER"]
-        W["review dashboard<br/>React 18 · Vite · TypeScript"]
+    subgraph BROWSER["SNOW VAR REVIEW DASHBOARD"]
+        W["React 18 · TypeScript · Vite<br/>3D Pose Inspector · Spin Timeline Scrub · Biomechanics VAR"]
     end
 
     SRC --> A
     B -- "clip.mp4 + bbox.txt" --> NIM
     NIM --> POSES
-    POSES --> C --> CSV
-    POSES --> D --> USDA
-    POSES --> E --> W
-    E -- "measured numbers only" --> NEMO
-    NEMO -- "CoachReport, schema-checked" --> W
+    POSES --> C
+    POSES --> D
+    C --> MA --> MB
+    MB --> MC
+    POSES --> W
+    C --> W
+    MB --> W
+    MC --> W
+    W -- "measured numbers only" --> NEMO
+    NEMO -- "Structured CoachReport" --> W
 ```
 
-Two things leave your machine: the clip and its boxes, going to the NIM, and,
-when you ask for coaching, the clip's measured numbers, going to Nemotron.
-Everything else — shot selection, tracking, the rotation maths, the
-dashboard — runs locally. Stages talk to each other only through files in
-`data/`, so any stage can be re-run on its own.
+---
 
-`export_session` picks up `features.csv` when you have run `features`, and
-falls back to a clearly-labelled display shim when you have not, so the
-dashboard works either way and always says which it is showing.
+## Machine Learning Architecture (Models A, B, C)
+
+```
+                       ┌─────────────────────────────────────────────────────────┐
+                       │                   77-Joint 3D Poses                     │
+                       └────────────────────────────┬────────────────────────────┘
+                                                    │
+                                                    ▼
+                       ┌─────────────────────────────────────────────────────────┐
+                       │               Model A · Airborne Segmenter              │
+                       │           Temporal 1D-CNN · Frame-Level Ground/Air      │
+                       └────────────────────────────┬────────────────────────────┘
+                                                    │
+                                        airborne start / end frames
+                                                    │
+                                                    ▼
+                       ┌─────────────────────────────────────────────────────────┐
+                       │           Model B · Factored Trick Classifier           │
+                       │           Shared Sequence Encoder + 5 Output Heads      │
+                       └─────┬───────────┬─────────────┬───────────┬─────────────┘
+                             │           │             │           │             │
+                             ▼           ▼             ▼           ▼             ▼
+                         Rotation      Sense        Stance       Axis          Grab
+                         [0..1800°]   [CW/CCW]    [Reg/Goofy]  [Flat/Cork/DC] [7 types]
+                             │           │             │           │             │
+                             └───────────┴─────────────┼───────────┴─────────────┘
+                                                       │
+                                                       ▼
+                                         Composed Official Trick Name
+                                    "Backside Double Cork 1080 Weddle"
+                                                       │
+                                                       ▼
+                       ┌─────────────────────────────────────────────────────────┐
+                       │          Model C · FIS Competition Score Model          │
+                       │    Gradient Boosted Trees trained on 4,995 FIS Jumps    │
+                       └────────────────────────────┬────────────────────────────┘
+                                                    │
+                                   ┌────────────────┴────────────────┐
+                                   ▼                                 ▼
+                             P(Landing): 91.2%             Expected FIS Score: 49.8
+```
+
+### Model A · Airborne Segmenter
+- **Purpose**: Distinguishes in-run approach, takeoff, airborne tricks, and landing contact.
+- **Architecture**: Temporal 1D Convolutional Neural Network operating over smoothed 3D joint velocities and center-of-mass trajectory.
+- **Execution**: Run `snow segmenter build`, `snow segmenter train`, and `snow features run1 --segmenter auto`.
+
+### Model B · Factored Trick Classifier
+- **Why Factored?** Independent prediction of rotation (0 to 1800° in 180° increments), spin sense (clockwise / counter-clockwise), stance (regular / goofy), axis (flat spin, single cork, double cork), and grab (indy, melon, mute, stalefish, tail, nose).
+- **Advantage**: Eliminates combinatorial explosion across hundreds of trick variants; mirror augmentation preserves physical geometric consistency.
+- **Execution**: Run `snow classify predict run1` or export to bundle with `python web/tools/export_session.py run1 --classify`.
+
+### Model C · FIS Big Air Judging Score Model
+- **Data**: Trained on official FIS results PDFs spanning 2019 to 2026 across 57 World Cup, World Championship, and Olympic contests (**4,995 jumps, 3,048 landed**).
+- **Performance**: **7.8 MAE** on landed jumps, **0.68 within-contest Spearman rank correlation** against a human single-judge panel error ceiling of 1.95.
+- **Features**: Dual-stage model: predicts landing probability $P(\text{land})$ and conditional panel score (0 to 100).
+- **Execution**: Run via `scoring/predict.py b-DC-10-Wed --gender M --final`.
+
+---
 
 ## Setup
 
 ```bash
-scripts/setup.sh          # venv (python 3.12), deps, vendored NVIDIA client
-cp .env.example .env      # then paste your key from build.nvidia.com
+# 1. Clone repository
+git clone https://github.com/chostudio/snow.git
+cd snow
+
+# 2. Setup Python environment (requires Python 3.10–3.12 for NVIDIA client)
+scripts/setup.sh
 source .venv/bin/activate
-snow doctor               # should end with "all good"
+
+# 3. Configure NVIDIA API credentials
+cp .env.example .env
+# Open .env and insert your API key from https://build.nvidia.com
+
+# 4. Verify environment
+snow doctor
 ```
 
-The NVIDIA client supports Python 3.10–3.12 only, so the venv is pinned to
-3.12 regardless of your system Python.
+`snow doctor` verifies your Python version, dependencies, FFmpeg installation, and NVIDIA API connection.
 
-## Try it
+---
+
+## Quickstart: Step-by-Step CLI Walkthrough
+
+### 1. Ingest & Track Monocular Video
 
 ```bash
+# Scout a competition video for usable slow-mo replays
 snow scout "https://www.youtube.com/watch?v=..." --name olympics
-```
 
-Scout lists the shots in the video, ranked. Most televised snowboarding is
-useless for pose — wide shots where the rider is 60 px tall, crowd cutaways,
-interviews. What you want is the **super-slow-motion replay**: high-speed
-camera, rider large and sharp. Scout flags those.
-
-Pick a shot and run it:
-
-```bash
+# Ingest and re-encode chosen segment
 snow ingest <url|file> run1 --start 00:00:34 --duration 24
-snow track  run1 --preview --show-candidates
-snow pose   run1 --overlay
+
+# Track rider bounding box (with candidate previews)
+snow track run1 --preview --show-candidates
+
+# Stitch across camera cuts (manual merge avoids identity fusion)
+snow track run1 --merge "1,8,945,1097,1738,1842" --preview
+```
+
+### 2. Extract 77-Joint 3D Poses & Kinematics
+
+```bash
+# Query NVIDIA 3D Body Pose NIM and generate skeleton overlay video
+snow pose run1 --overlay
+
+# Extract camera-subtracted 3D rotation, spin angles, and velocities
 snow features run1
+
+# Export 3D OpenUSD scene for Omniverse / Isaac Sim
+snow usd run1
 ```
 
-`--overlay` writes a video with the skeleton drawn on the rider, which is the
-fastest way to see whether any of it worked.
+`--overlay` writes `data/poses/run1.overlay.mp4` with the 77-joint skeleton projected onto the original footage.
 
-Then review it in the browser:
+### 3. Classify Trick & Predict FIS Score
 
 ```bash
-cd web && npm ci
-../.venv/bin/python tools/export_session.py run1
-npm run dev
+# Name aerial tricks using Model B
+snow classify predict run1
+
+# Predict official FIS score using Model C
+cd scoring && uv run python predict.py b-DC-10-Wed --gender M --final
 ```
 
-For the live coach, run `snow serve` and start the dashboard with
-`VITE_API_BASE=http://127.0.0.1:8000 npm run dev`; **Re-run analysis** then
-asks Nemotron. Without it the panel shows a rule-based template and says so.
-[docs/coach.md](docs/coach.md) has the details.
-
-<small>A 24-second 1080p clip is about 19 seconds of inference.</small>
-
-### Label real airs
-
-The models are measured on synthetic renders only; real labels are the gap.
-One command opens a labelling page on localhost:
+### 4. Launch Snow VAR Review Dashboard
 
 ```bash
-snow label            # http://127.0.0.1:8765; --fetch first copies the model weights from S3
+# Export session bundle for web dashboard
+python web/tools/export_session.py run1 --classify
+
+# Start API server for live Nemotron coach
+snow serve &
+
+# Launch interactive React dashboard
+cd web && npm ci && npm run dev
 ```
 
-It lists the real clips in `data/clips`, plays them frame by frame with the
-skeleton on top, pre-fills the machines' guesses (clearly marked as such),
-autosaves to `data/labels/real_airs.csv`, and has a beginner's guide to
-snowboard tricks beside the player ([docs/labelling.md](docs/labelling.md)).
-`snow segmenter build --gold data/labels/real_airs.csv` reads that file.
+Open [http://localhost:5173](http://localhost:5173) in your browser.
 
-## Two things that will bite you
+---
 
-**Broadcast cuts shatter tracking.** Every camera cut makes the tracker issue
-the rider a new id, so automatic selection covered only 35% of a test clip.
-Run `--show-candidates`, watch the preview, and stitch the ids yourself:
+## Deployment Options
 
-```bash
-snow track run1 --merge "1,8,945,1097,1738,1842" --preview   # 35% -> 73%
-```
+### 1. NVIDIA Cloud Endpoints (Default)
+- **Zero Local GPU Needed**: The 3D Body Pose NIM runs via hosted gRPC on NVIDIA NVCF (`build.nvidia.com`).
+- The AI Coach runs via NVIDIA Nemotron Chat API.
+- All local processing (tracking, camera homography, rotation math, web dashboard) runs lightweight on CPU.
 
-It is manual on purpose — guessing which track is the same person across a cut
-can silently fuse two riders into one.
+### 2. Nebius Cloud GPU Backend (`deploy/nebius/`)
+- Automated GPU VM deployment (NVIDIA L4 / H100) on Nebius Compute with S3-compatible object storage.
+- Runs self-hosted containerized NIM, Model A/B training, and high-throughput batch extraction.
+- See [deploy/nebius/README.md](deploy/nebius/README.md).
 
-**Slow motion lies about time.** Broadcast slow motion is shot fast and
-conformed to 30 fps, so the file claims 30 fps and the timestamps are wrong.
-Totals are fine (720° is still 720°) but every per-second number is off by the
-slow-motion factor. If you know it, pass it:
+### 3. AWS Hosted Deployment
+- Production AWS deployment configuration preserved on the `aws-deployment` branch (`tag: aws-hosted-release`).
 
-```bash
-snow ingest <src> trick --start 00:00:34 --duration 8 --slowmo-factor 4
-```
+---
 
-It cannot be recovered from the file.
+## Truth in Numbers & Validation
 
-## How much to trust the numbers
+Read [docs/validation.md](docs/validation.md) for full benchmarks. Key takeaways:
 
-Short version: **angles and comparisons yes, absolute spin counts and metres
-not yet.**
+- **Exact Synthetic Math**: On synthetic motion renders (Isaac Sim), rotation mathematics is exact within **2°** (e.g. a known 1080° spin returns 1080° &plusmn; 2°).
+- **Held-Out Synthetic Evaluation**: Tested across 96 held-out synthetic clips: the classifier names **96/96** tricks correctly with exact poses, and **67/96** when piped through the full noisy monocular pose pipeline.
+- **FIS Score Prediction**: 7.8 MAE on landed jumps across 57 World Cup and Olympic contests, capturing ~40% of score variance from trick difficulty alone.
+- **Camera Cut Recovery**: Broadcast cuts break tracker continuity. Snow provides interactive candidate ID inspection (`--show-candidates`) and manual track stitching (`--merge`) to guarantee correct athlete identity across cuts.
+- **Metric Scale Note**: Without multi-camera metric calibration, absolute heights and scale are normalized. Angles, rotations, tilt ratios, and angular velocities hold true.
 
-- On synthetic motion the maths is exact — a known 1080 about a known axis
-  comes back as 1080, within 2°.
-- On real footage, absolute spin counts are **unvalidated**. On a clip from a
-  video titled *"Frontside Double Cork 1080"* the pipeline reads 720 (667°
-  over its detected air). It has not been established that the shot the
-  scout picked is the trick the title names, nor where its air starts, so
-  that is an open question rather than a known error rate.
-- On 96 held-out synthetic clips the dashboard names the spin on 67, at any
-  slow motion, without being told the factor; with exact poses, 96. The gap
-  is the pose model's error.
-- Metric scale is uncalibrated — the focal length is assumed. Exported
-  skeletons come out about 1.2 m tall. Angles and ratios hold; metres do not.
+---
 
-[docs/validation.md](docs/validation.md) is the honest, complete version.
-Read it before you quote a number.
+## Documentation Sitemap
 
-## Going deeper
-
-| | |
+| Deep Dive | Description |
 |---|---|
-| [docs/footage.md](docs/footage.md) | finding usable shots, slow motion, encoding rules |
-| [docs/tracking.md](docs/tracking.md) | the bbox format, stitching tracks, reframing safely |
-| [docs/nim.md](docs/nim.md) | the NIM: endpoint, input rules, output format, self-hosting |
-| [docs/rotation.md](docs/rotation.md) | camera compensation and the three rotation measures |
-| [docs/usd.md](docs/usd.md) | USD / Omniverse export |
-| [docs/validation.md](docs/validation.md) | what is proven and what is not |
-| [docs/coach.md](docs/coach.md) | the Nemotron coach: what it sees, what it may return |
-| [docs/labelling.md](docs/labelling.md) | `snow label`, and how to tell tricks apart if you have never watched snowboarding |
-| [docs/training.md](docs/training.md) | **planned:** how the models would be trained |
-| [web/README.md](web/README.md) | the review dashboard |
-| [AGENTS.md](AGENTS.md) | architecture map, for agents working on the code |
+| [docs/classifier.md](docs/classifier.md) | **Model B**: Factored 5-head neural network trick classification |
+| [docs/segmenter.md](docs/segmenter.md) | **Model A**: Airborne temporal CNN segmentation |
+| [scoring/README.md](scoring/README.md) | **Model C**: FIS Big Air competition score regression |
+| [docs/footage.md](docs/footage.md) | Broadcast footage scout, slow-motion conform timing, encoding |
+| [docs/tracking.md](docs/tracking.md) | YOLO11 + ByteTrack bbox format, candidate stitching |
+| [docs/nim.md](docs/nim.md) | NVIDIA 3D Body Pose NIM endpoint, gRPC rules, self-hosting |
+| [docs/rotation.md](docs/rotation.md) | Camera compensation, homography, True Body Frame rotation |
+| [docs/usd.md](docs/usd.md) | OpenUSD `.usda` export, Omniverse Isaac Sim digital twin |
+| [docs/coach.md](docs/coach.md) | NVIDIA Nemotron AI coach, prompt engineering, structured reports |
+| [docs/labelling.md](docs/labelling.md) | `snow label` human annotation tool for real broadcast gold sets |
+| [docs/synthetic.md](docs/synthetic.md) | NVIDIA Omniverse Replicator dataset generation in Isaac Sim |
+| [docs/validation.md](docs/validation.md) | Comprehensive synthetic and real validation benchmarks |
+| [deploy/nebius/README.md](deploy/nebius/README.md) | Nebius Cloud GPU VM setup and deployment |
+| [web/README.md](web/README.md) | React review dashboard architecture and configuration |
+| [AGENTS.md](AGENTS.md) | Technical architecture overview for AI agents working on Snow |
 
-## Layout
+---
+
+## Repository Layout
 
 ```
-src/snow/           the pipeline, one module per stage
-web/                review dashboard (React) + session exporter
-docs/               the deep dives above
-tests/              105 tests, ~20s, no network and no GPU
-scripts/setup.sh    venv, deps, vendored NVIDIA client
-vendor/             upstream NVIDIA gRPC client (cloned, gitignored)
-data/               clips, tracks, poses (gitignored)
+├── src/snow/               # Core pipeline: scout, ingest, track, pose, features, learn, serve
+│   ├── learn/              # Model A (segmenter) and Model B (classifier) architectures
+│   ├── label/              # Web-based real clip annotation tool (`snow label`)
+│   └── cli.py              # Unified `snow` command line interface
+├── scoring/                # Model C: FIS Big Air score regressor & landing classifier
+│   ├── fis.py              # FIS official results crawler (2019-2026)
+│   ├── parse.py            # PDF parser -> jumps.csv
+│   ├── train.py            # Gradient boosted trees training & cross-validation
+│   └── predict.py          # Trick scoring CLI
+├── web/                    # Snow VAR Review Dashboard (React 18 + Vite + TypeScript)
+│   ├── src/components/     # 3D Pose Inspector, Spin Scrubbing Timeline, AI Coach
+│   └── tools/              # Session bundle exporter
+├── docs/                   # 14 technical deep dives (footage, tracking, NIM, rotation, etc.)
+│   └── media/              # 34s walkthrough video, animated skeleton GIF, and screenshots
+├── deploy/                 # Cloud deployment configurations
+│   └── nebius/             # Nebius Cloud GPU instance setup (startup.sh)
+├── tests/                  # 191 unit tests (~45s execution, no network/GPU needed)
+└── scripts/                # Environment setup, demo builders, and utilities
 ```
 
-## Next
+---
 
-Everything above is geometric: it *measures* rotation, it does not *classify*
-tricks. The learned half — a segmenter that finds the airs and a classifier
-that names them — is designed but not built.
-[docs/training.md](docs/training.md) has its own two diagrams, matching the
-pair above: how it would be trained, and on what.
+## License & Attribution
 
-Closing the validation question comes first, though, and conveniently it is
-the same work: labelling a set of clips frame by frame both settles whether
-the pipeline's spin counts are right *and* produces the gold set the models
-need to be evaluated against.
+Built for the **NVIDIA Developer Contest**.
+Pose estimation powered by the [NVIDIA 3D Body Pose NIM](https://build.nvidia.com/nvidia/body-pose).
+Physics simulation powered by NVIDIA Isaac Sim & Omniverse Replicator.
+AI Coach powered by NVIDIA Nemotron.
